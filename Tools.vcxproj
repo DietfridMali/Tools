@@ -31,6 +31,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="avltree.c" />
+    <ClCompile Include="comparators.c" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
