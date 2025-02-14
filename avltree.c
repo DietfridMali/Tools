@@ -49,7 +49,7 @@ static void* find_value(avlTreeDescriptor_t* avlTree)
 //-----------------------------------------------------------------------------
 // Allocate a new avl tree node.
 
-avlTreeNode_t* avltree_alloc_node(avlTreeDescriptor_t* avlTree, void* value)
+static avlTreeNode_t* avltree_alloc_node(avlTreeDescriptor_t* avlTree, void* value)
 {
     if (!(avlTree->current = (avlTreeNode_t*)malloc(sizeof (avlTreeNode_t)))) {
         return NULL;
@@ -334,7 +334,7 @@ static bool remove_node(avlTreeDescriptor_t* avlTree, avlTreeNode_t** root, bool
 //-----------------------------------------------------------------------------
 // Free all nodes in left and right sub trees of *root, then free root.
 
-void free_nodes(avlTreeNode_t* root)
+static void free_nodes(avlTreeNode_t* root)
 {
     if (root) {
         free_nodes(root->left);
@@ -346,7 +346,7 @@ void free_nodes(avlTreeNode_t* root)
 //-----------------------------------------------------------------------------
 // Free all nodes of the avl tree avlTree.
 
-void avltree_free(avlTreeDescriptor_t* avlTree)
+static void avltree_free(avlTreeDescriptor_t* avlTree)
 {
     free_nodes(avlTree->root);
 }
@@ -489,7 +489,7 @@ static void* avltree_find(avlTreeDescriptor_t* avlTree, void* key)
 //-----------------------------------------------------------------------------
 // Return the value with the smallest key stored in avl tree avlTree.
 
-void* avltree_get_min(avlTreeDescriptor_t* avlTree)
+static void* avltree_get_min(avlTreeDescriptor_t* avlTree)
 {
     if (!avlTree->root)
         return NULL;
@@ -502,7 +502,7 @@ void* avltree_get_min(avlTreeDescriptor_t* avlTree)
 //-----------------------------------------------------------------------------
 // Return the value with the biggest key stored in avl tree avlTree.
 
-void* avltree_get_max(avlTreeDescriptor_t* avlTree)
+static void* avltree_get_max(avlTreeDescriptor_t* avlTree)
 {
     if (!avlTree->root)
         return NULL;
