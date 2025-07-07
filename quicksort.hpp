@@ -8,6 +8,8 @@
 #	define __cdecl
 #endif
 
+#include <stdexcept>
+
 //-----------------------------------------------------------------------------
 
 template < typename DATA_T > 
@@ -18,14 +20,11 @@ class QuickSort {
 		template<typename KEY_T>
 		using tSearchComparator = int(__cdecl*)(const DATA_T&, const KEY_T&);
 
-		/*
-		void SortAscending (DATA_T* data, size_t left, size_t right);
-		void SortDescending (DATA_T* data, size_t left, size_t right);
-		void SortAscending (DATA_T* data, size_t left, size_t right, comparator compare);
-		void SortDescending (DATA_T* data, size_t left, size_t right, comparator compare);
-		inline void Swap (DATA_T* left, DATA_T* right);
-		size_t BinSearch (DATA_T* data, size_t l, size_t r, DATA_T key);
-*/
+		// holds a copy of the median data for sorting; one global variable should work 
+		// as it is only used during the sorting part and not during the recursive descent
+		tComparator	m_compare;
+		DATA_T		m_median;
+
 //-----------------------------------------------------------------------------
 
 inline void Swap(DATA_T* left, DATA_T* right)
@@ -39,11 +38,11 @@ inline void Swap(DATA_T* left, DATA_T* right)
 
 //-----------------------------------------------------------------------------
 
-void SortAscending(DATA_T* data, size_t left, size_t right)
+void SortAscending(DATA_T* data, int32_t left, int32_t right)
 {
-	size_t	l = left,
+	int32_t	l = left,
 			r = right;
-	DATA_T* m = data + (l + r) / 2;
+	DATA_T*	m = new DATA_T(data [(l + r) / 2]);
 
 	do {
 		while (data[l] < *m)
@@ -57,6 +56,8 @@ void SortAscending(DATA_T* data, size_t left, size_t right)
 			r--;
 		}
 	} while (l <= r);
+	memset(&m_median, 0, sizeof(DATA_T));
+
 	if (l < right)
 		SortAscending(data, l, right);
 	if (left < r)
@@ -65,16 +66,16 @@ void SortAscending(DATA_T* data, size_t left, size_t right)
 
 //-----------------------------------------------------------------------------
 
-void SortDescending(DATA_T* data, size_t left, size_t right)
+void SortDescending(DATA_T* data, int32_t left, int32_t right)
 {
-	size_t	l = left,
+	int32_t	l = left,
 			r = right;
-	DATA_T* m = data + (l + r) / 2;
 
+	memcpy(&m_median, data + (l + r) / 2, sizeof(DATA_T));
 	do {
-		while (data[l] > *m)
+		while (data[l] > m_median)
 			l++;
-		while (data[r] < *m)
+		while (data[r] < m_median)
 			r--;
 		if (l <= r) {
 			if (l < r)
@@ -83,6 +84,8 @@ void SortDescending(DATA_T* data, size_t left, size_t right)
 			r--;
 		}
 	} while (l <= r);
+	memset(&m_median, 0, sizeof(DATA_T));
+
 	if (l < right)
 		SortDescending(data, l, right);
 	if (left < r)
@@ -91,16 +94,17 @@ void SortDescending(DATA_T* data, size_t left, size_t right)
 
 //-----------------------------------------------------------------------------
 
-void SortAscending(DATA_T* data, size_t left, size_t right, tComparator compare)
+void Sort(DATA_T* data, int32_t left, int32_t right, int direction)
 {
-	size_t	l = left,
+	int32_t	l = left,
 			r = right;
-	DATA_T* m = data + (l + r) / 2;
-
+	
+	// flat copy to avoid any complicated copy operations; data only needed to have a fixed median value
+	memcpy(&m_median, data + (l + r) / 2, sizeof(DATA_T)); 
 	do {
-		while (compare(data + l, m) < 0)
+		while (direction * m_compare(data + l, &m_median) > 0)
 			l++;
-		while (compare(data + r, m) > 0)
+		while (direction * m_compare(data + r, &m_median) < 0)
 			r--;
 		if (l <= r) {
 			if (l < r)
@@ -109,46 +113,41 @@ void SortAscending(DATA_T* data, size_t left, size_t right, tComparator compare)
 			r--;
 		}
 	} while (l <= r);
+	// make sure m_median doesn't contain any d'tors
+	memset(&m_median, 0, sizeof(DATA_T)); 
+
 	if (l < right)
-		SortAscending(data, l, right, compare);
+		Sort(data, l, right, direction);
 	if (left < r)
-		SortAscending(data, left, r, compare);
+		Sort(data, left, r, direction);
 }
 
 //-----------------------------------------------------------------------------
 
-void SortDescending(DATA_T* data, size_t left, size_t right, tComparator compare)
+void SortDescending(DATA_T* data, int32_t left, int32_t right, tComparator compare)
 {
-	size_t	l = left,
-			r = right;
-	DATA_T	m;
-	
-	memcpy (&m, data + (l + r) / 2, sizeof (DATA_T));
+	if (right - left > 1) {
+		m_compare = compare;
+		Sort(data, left, right, -1);
+	}
+}
 
-	do {
-		while (compare(data + l, &m) > 0)
-			l++;
-		while (compare(data + r, &m) < 0)
-			r--;
-		if (l <= r) {
-			if (l < r)
-				Swap(data + l, data + r);
-			l++;
-			r--;
-		}
-	} while (l <= r);
-	if (l < right)
-		SortDescending(data, l, right, compare);
-	if (left < r)
-		SortDescending(data, left, r, compare);
+//-----------------------------------------------------------------------------
+
+void SortAscending(DATA_T* data, int32_t left, int32_t right, tComparator compare)
+{
+	if (right - left > 1) {
+		m_compare = compare;
+		Sort(data, left, right, 1);
+	}
 }
 
 // ----------------------------------------------------------------------------
 /*
 template<typename KEY_T>
-size_t BinSearch(const DATA_T* data, size_t l, size_t r, typename KEY_T::KeyType key) 
+int32_t BinSearch(const DATA_T* data, int32_t l, int32_t r, typename KEY_T::KeyType key) 
 {
-	size_t	m;
+	int32_t	m;
 
 	do {
 		m = (l + r) / 2;
@@ -169,9 +168,9 @@ size_t BinSearch(const DATA_T* data, size_t l, size_t r, typename KEY_T::KeyType
 // ----------------------------------------------------------------------------
 
 template<typename KEY_T>
-size_t BinSearch(DATA_T* const data, KEY_T const& key, int(__cdecl* compare)(DATA_T const&, KEY_T const&), size_t l, size_t r)
+int32_t BinSearch(DATA_T* const data, KEY_T const& key, int(__cdecl* compare)(DATA_T const&, KEY_T const&), int32_t l, int32_t r)
 {
-	size_t	m;
+	int32_t	m;
 	int		i;
 
 	do {

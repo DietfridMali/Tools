@@ -120,8 +120,18 @@ static comparatorDescriptor_t comparatorDescriptors[] = {
 };
 
 // ------------------------------------------------------------------
+// Return sizeof of data type with name typeName
+comparatorDescriptor_t* get_comparator(const char* typeName)
+{
+	for (comparatorDescriptor_t* p = comparatorDescriptors; p->typeName != NULL; p++)
+		if (!strcmp(p->typeName, typeName))
+			return p;
+	return NULL;
+}
+
+// ------------------------------------------------------------------
 // Find a comparator from a type with same size and signedness
-static valueComparator_t find_matching_comparator(const int typeSize)
+static valueComparator_t find_matching_comparator(int typeSize)
 {
 	for (comparatorDescriptor_t* pd = comparatorDescriptors; pd->isSizedInt; pd++) {
 		if (pd->typeSize == typeSize) {

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <stdexcept>
+#include <utility>
 #include "array.hpp"
 
 //-----------------------------------------------------------------------------
@@ -11,137 +13,190 @@
 template < class DATA_T > 
 class Stack : public Array< DATA_T > {
 	protected:
-		size_t	m_tos;
-		size_t	m_growth;
+		int32_t	m_tos;
+		int32_t	m_growth;	// how much to increase buffer size if the stack is full and something gets pushed on it; -1 = no growth, zero = double capacity every time growth is needed
+		bool	m_reorder;	// allow reordering on element deletion
 
 	public:
 		Stack () { Init (); }
 
-		Stack (size_t nLength) { 
+		Stack (int32_t capacity, int32_t growth = 0, bool reorder = false) { 
 			Init (); 
-			Create (nLength);
+			Reserve (capacity, growth, reorder);
 			}
+
 
 		~Stack() { Destroy (); }
 
-		inline void Reset (void) { m_tos = 0; }
+
+		inline void Reset (void) { 
+			m_tos = 0; 
+		}
+
+
+		inline void Clear(DATA_T clearValue) {
+			for (int32_t i = 0; i < m_tos; i++)
+				(*this)[i] = clearValue;
+			Reset();
+		}
+
+
+		inline bool AllowReordering(bool reorder) {
+			m_reorder = reorder;
+		}
+
 
 		inline void Init (void) { 
 			m_growth = 0;
-			Reset ();
+			Reset();
 			Array<DATA_T>::Init ();
 			}
 
-		inline bool Grow (const size_t i = 1) {
-			if ((m_tos + i > this->m_info.length) && (!(m_growth && this->Resize (this->m_info.length + m_growth)))) {
-				return false;
+
+		inline bool Grow (const int32_t i = 1) {
+			if (m_tos + i >= this->m_info.capacity) {
+				if (not m_growth) {
+					throw std::runtime_error("stack out of space");
+					return false;
 				}
-//#pragma omp critical
+				if (not this->Resize(this->m_info.capacity + m_growth)) {
+					throw std::runtime_error("stack expansion failed");
+					return false;
+				}
+				//#pragma omp critical
+			}
 			m_tos += i;
 			return true;
 			}
 
-		inline bool Push (const DATA_T elem) { 
-			if (!Grow ())
+		
+		template<typename T>
+		inline bool Push (T&& data) { 
+			if (not Grow ())
 				return false;
 //#pragma omp critical
-			this->m_info.data [m_tos - 1] = elem;
+			*(this->Data(m_tos - 1)) = std::forward<T>(data);
 			return true;
 			}
 	
-		inline void Shrink (size_t i = 1) {
+		
+		inline int32_t Shrink (int32_t i = 1) {
 //#pragma omp critical
 			if (i >= m_tos)
 				m_tos = 0;
 			else
 				m_tos -= i;
+			return m_tos;
 			}
+
 
 		inline DATA_T& Pop (void) {
 //#pragma omp critical
-			Shrink ();
-			return this->m_info.data [m_tos];
+			return *(this->Data(Shrink()));
 			}
 
-		inline void Truncate (size_t i = 1) {
+
+		inline void Truncate (int32_t i = 1) {
 			if (i < m_tos)
 				m_tos = i;
 			}
 
-		inline size_t Find (DATA_T& elem) {
-			for (size_t i = 0; i < m_tos; i++)
-				if (this->m_info.data [i] == elem)
+
+		inline int32_t Find (DATA_T& data) {
+			for (int32_t i = 0; i < m_tos; i++)
+				if (this->m_data [i] == data)
 					return i;
 			return m_tos;
 			}
 
-		inline size_t ToS (void) { return m_tos; }
 
-		inline DATA_T* Top (void) { return (this->m_info.data && m_tos) ? this->m_info.data + m_tos - 1 : NULL; }
+		inline int32_t ToS (void) { return m_tos; }
 
-		inline bool Delete (size_t i) {
-			if (i >= m_tos) {
+
+		inline DATA_T* Top (void) { return (this->m_data && m_tos) ? this->m_data + m_tos - 1 : NULL; }
+
+
+		inline bool Delete (int32_t i) {
+			if (i >= m_tos) 
 				return false;
-				}
 //#pragma omp critical
-			if (i < --m_tos)
-				memcpy (this->m_info.data + i, this->m_info.data + i + 1, sizeof (DATA_T) * (m_tos - i));
+			if (i < --m_tos) 
+				memcpy(this->m_data + i, this->m_data + i + 1, sizeof(DATA_T) * (m_tos - i));
 			return true;
 			}
 
-		inline bool DeleteElement (DATA_T& elem) { return Delete (Find (elem));	}
 
-		inline DATA_T& Pull (DATA_T& elem, size_t i) {
+		inline bool DeleteElement (DATA_T& data) { return Delete (Find (data));	}
+
+
+		inline DATA_T& Pull (DATA_T& data, int32_t i) {
 //#pragma omp critical
 			if (i < m_tos) {
-				elem = this->m_info.data [i];
+				data = this->m_data [i];
 				Delete (i);
 				}
-			return elem;
+			return data;
 			}
 
-		inline DATA_T Pull (size_t i) {
+
+		inline DATA_T Pull (int32_t i) {
 			DATA_T	v;
 			return Pull (v, i);
 			}
 
-		inline void Destroy (void) { 
+
+		inline DATA_T* GetRef(int32_t i) {
+			//#pragma omp critical
+			return (i < m_tos) ? this->m_data + i : nullptr;
+		}
+
+
+		inline void Destroy (void) {
 			Array<DATA_T>::Destroy ();
 			m_tos = 0;
 			}
 
-		inline DATA_T *Create (size_t length, size_t growth = 0) {
+
+		inline DATA_T *Reserve (int32_t capacity, int32_t growth = 0, bool reorder = false) {
 			Destroy ();
-			m_growth = (growth > 0) ? growth : length;
-			return Array<DATA_T>::Create (length);
+			m_growth = (static_cast<ptrdiff_t>(growth) < 0) ? 0 : (growth > 0) ? growth : capacity;
+			m_reorder = reorder;
+			return Array<DATA_T>::Reserve (capacity);
 			}
 
-		inline size_t Growth (void) { return m_growth; }
 
-		inline void SetGrowth (size_t growth) { m_growth = growth; }
+		inline int32_t Growth (void) { return m_growth; }
 
-		inline void SortAscending (size_t left = 0, size_t right = 0) { 
-			if (this->m_info.data)
-				QuickSort<DATA_T>::SortAscending (this->m_info.data, left, (right >= 0) ? right : m_tos - 1); 
+
+		inline void SetGrowth (int32_t growth) { m_growth = growth; }
+
+
+		inline void SortAscending (int32_t left = 0, int32_t right = 0) { 
+			if (this->m_data)
+				QuickSort<DATA_T>::SortAscending (this->m_data, left, (right >= 0) ? right : m_tos - 1); 
 				}
 
-		inline void SortDescending (size_t left = 0, size_t right = 0) {
-			if (this->m_info.data)
-				QuickSort<DATA_T>::SortDescending (this->m_info.data, left, (right >= 0) ? right : m_tos - 1);
+
+		inline void SortDescending (int32_t left = 0, int32_t right = 0) {
+			if (this->m_data)
+				QuickSort<DATA_T>::SortDescending (this->m_data, left, (right >= 0) ? right : m_tos - 1);
 			}
 
-		inline void SortAscending (QuickSort<DATA_T>::tComparator compare, size_t left = 0, size_t right = 0) {
-			if (this->m_info.data)
-				QuickSort<DATA_T>::SortAscending (this->m_info.data, left, (right >= 0) ? right : m_tos - 1, compare);
+
+		inline void SortAscending (QuickSort<DATA_T>::tComparator compare, int32_t left = 0, int32_t right = 0) {
+			if (this->m_data)
+				QuickSort<DATA_T>::SortAscending (this->m_data, left, (right >= 0) ? right : m_tos - 1, compare);
 			}
 
-		inline void SortDescending (QuickSort<DATA_T>::tComparator compare, size_t left = 0, size_t right = 0) {
-			if (this->m_info.data)
-				QuickSort<DATA_T>::SortDescending (this->m_info.data, left, (right >= 0) ? right : m_tos - 1, compare);
+
+		inline void SortDescending (QuickSort<DATA_T>::tComparator compare, int32_t left = 0, int32_t right = 0) {
+			if (this->m_data)
+				QuickSort<DATA_T>::SortDescending (this->m_data, left, (right >= 0) ? right : m_tos - 1, compare);
 			}
 
-		inline size_t BinSearch (DATA_T key, size_t left = 0, size_t right = 0) {
-			return this->m_info.data ? QuickSort<DATA_T>::BinSearch (this->m_info.data, left, (right >= 0) ? right : m_tos - 1, key) : -1;
+
+		inline int32_t BinSearch (DATA_T key, int32_t left = 0, int32_t right = 0) {
+			return this->m_data ? QuickSort<DATA_T>::BinSearch (this->m_data, left, (right >= 0) ? right : m_tos - 1, key) : -1;
 			}
 
 	};

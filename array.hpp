@@ -1,71 +1,153 @@
-// Copyright (c) 2025 Dietfrid Mali
+﻿// Copyright (c) 2025 Dietfrid Mali
 // This software is licensed under the MIT License.
 // See the LICENSE file for more details.
 
 #pragma once
 
+#define NOMINMAX
+
+#include <algorithm>
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <iostream>
-
-#if 0	// use std::vector
-
-#include <vector>
-
-template < typename DATA_T, typename KEY_T >
-class Array : public std::vector < DATA_T >
-{
-public:
-	inline DATA_T* Create (size_t length) {
-		this->reserve (length);
-		this->resize (length);
-		return this->data ();
-	}
-
-	inline void Destroy(void) {
-		this->clear ();
-	}
-
-	inline DATA_T* Data(void) {
-		return this->data ();
-	}
-};
+#include <cstddef> // für int32_t
+#include <type_traits>
 
 
-#else
-
+#include "sharedpointer.hpp"
 #include "quicksort.hpp"
 
 #define sizeofa(_a)	((sizeof(_a) / sizeof(*(_a))))
 
-//-----------------------------------------------------------------------------
+#include "allocator.h"
 
-template < typename DATA_T > 
-class Array : public QuickSort < DATA_T > {
+// =================================================================================================
+
+template<typename DATA_T, typename POINTER_T = DATA_T*>
+class ArrayBuffer {
+protected:
+	POINTER_T	m_handle = nullptr;
+	bool		m_isStatic = false;
+
+public:
+	ArrayBuffer() = default;
+
+	explicit ArrayBuffer(POINTER_T handle, bool isStatic = false) 
+		: m_handle(handle), m_isStatic (isStatic)
+	{ }
+
+	// Zuweisung eines rohen Zeigers oder eines SharedPointers
+	ArrayBuffer& operator=(POINTER_T p) {
+		m_handle = p;
+		return *this;
+	}
+
+	// Cast in DATA_T*, z. B. für Arrayzugriff
+	operator DATA_T*() const {
+		if constexpr (std::is_pointer_v<POINTER_T>) {
+			return m_handle;
+		}
+		else {
+			return static_cast<DATA_T*>(m_handle); // erwartet: SharedPointer<DATA_T>::operator DATA_T*()
+		}
+	}
+
+	void SetBuffer(DATA_T* data, bool isStatic) {
+		if constexpr (std::is_pointer_v<POINTER_T>) {
+			m_handle = data;
+		}
+		else {
+			m_handle = POINTER_T(data, true, isStatic); 
+		}
+		m_isStatic = isStatic;
+	}
+
+	inline POINTER_T& BufferHandle(void) {
+		return m_handle;
+	}
+
+	inline const POINTER_T& BufferHandle(void) const {
+		return m_handle;
+	}
+
+	// Optionaler []-Zugriff
+	DATA_T& operator[](int32_t i) {
+		return operator DATA_T*()[i];
+	}
+
+	const DATA_T& operator[](int32_t i) const {
+		return operator DATA_T*()[i];
+	}
+
+	void Destroy() {
+		if constexpr (std::is_pointer_v<POINTER_T>) {
+			if (m_handle) {
+				if (not m_isStatic)
+					delete[] m_handle;
+				m_handle = nullptr;
+			}
+		}
+		else {
+			m_handle.Release();
+			m_isStatic = false;
+		}
+	}
+
+	inline bool IsStatic(void) const {
+		return !operator DATA_T*() or m_isStatic;
+	}
+
+	~ArrayBuffer() {
+		Destroy();
+	}
+};
+
+// =================================================================================================
+
+template < typename DATA_T, typename POINTER_T = DATA_T* >
+class Array 
+	: public ArrayBuffer<DATA_T, POINTER_T>
+	, public QuickSort < DATA_T >
+#if DEBUG_MALLOC 
+	, public Allocator
+#endif
+{
+public:
+	using Base = ArrayBuffer<DATA_T, POINTER_T>;
+	using Base::operator=; // erlaubt Zuweisung über m_handle = ...
+	using Base::IsStatic;
+	using Base::BufferHandle;
+	using HANDLE_T = DATA_T*;
+
+private:
 
 	// ----------------------------------------
 
 	class ArrayInfo {
 		public:
-			DATA_T*	data;
-			DATA_T	none;
-			size_t	length;
-			size_t	pos;
-			size_t	mode;
+			int32_t	capacity;
+			int32_t	height;
+			int32_t	width;
+			int32_t	pos;
+			int32_t	offset;
 			bool	wrap;
 
 		public:
 
-			ArrayInfo() : data(nullptr), length(0), pos(0), mode(0), wrap(false) {
-				memset(&none, 0, sizeof(none));
-			}
+			ArrayInfo(int32_t _width = 0, int32_t _height = 0, int32_t _offset = 0) 
+				: capacity(0), height(_height), width(_width), pos(0), offset(_offset), wrap(false)
+			{ }
 
-			inline size_t Capacity (void) { return length; }
+			inline int32_t Capacity (void) { return capacity; }
 		};
 
 	protected:
-		ArrayInfo		m_info;
+		const char*				m_name;
+		ArrayInfo				m_info;
+		//ArrayBuffer<DATA_T	m_handle;
+		DATA_T					m_none;
 
 		// ----------------------------------------
 
@@ -85,8 +167,8 @@ class Array : public QuickSort < DATA_T > {
 					return m_current != nullptr; 
 				}
 
-				DATA_T* operator*() const { 
-					return m_current; 
+				DATA_T& operator*() const { 
+					return *m_current; 
 				}
 
 				Iterator& operator++() { 
@@ -121,37 +203,57 @@ class Array : public QuickSort < DATA_T > {
 
 		// ----------------------------------------
 
-		Array() { 
-			Init (); 
-			}
+		Array(const char* name = "")
+			: m_name(name), m_info(), m_none(DATA_T())
+		{
+			// fprintf(stderr, "%s\n", __FUNCSIG__);
+		}
 		
-		explicit Array(const size_t nLength) { 
-			Init (); 
-			Create (nLength);
-			}
+		explicit Array(const int32_t capacity) 
+			: m_info(), m_none(DATA_T())
+		{
+			// fprintf(stderr, "%s\n", __FUNCSIG__);
+			Reserve (capacity);
+		}
 		
-		Array(Array const& other) {
-			Init (); 
-			Copy (other);
-			}
-		
-		Array (Array&& other) {
-			Grab (other);
+		explicit Array(const int32_t width, const int32_t height) 
+			: m_info(width, height), m_none(DATA_T())
+		{
+				// fprintf(stderr, "%s\n", __FUNCSIG__);
+			Reserve(width, height);
 		}
 
-		explicit Array(DATA_T const * data, size_t dataLength) {
-			Init();
-			Create(dataLength);
-			memcpy(m_info.data, data, sizeof(DATA_T) * dataLength);
+		Array(Array const& other) 
+			: m_info(), m_none(DATA_T())
+		{
+			// fprintf(stderr, "%s\n", __FUNCSIG__);
+			CopyData (other);
+		}
+		
+		Array (Array&& other) 
+			: m_info(), m_none(DATA_T())
+		{
+			// fprintf(stderr, "%s\n", __FUNCSIG__);
+			Move (other);
 		}
 
-		Array(std::initializer_list<DATA_T> data) {
-			Init();
-			Create(data.size ());
-			size_t i = 0;
+		explicit Array(DATA_T const * data, int32_t capacity, int32_t offset = 0) 
+			: m_info(0, 0, offset), m_none(DATA_T())
+		{
+			// fprintf(stderr, "%s\n", __FUNCSIG__);
+			Reserve(capacity);
+			memcpy(Data(), data, sizeof(DATA_T) * capacity);
+		}
+
+		Array(std::initializer_list<DATA_T> data) 
+			: m_info(), m_none(DATA_T())
+		{
+			// fprintf(stderr, "%s\n", __FUNCSIG__);
+			Reserve(int32_t(data.size ()));
+			int32_t i = 0;
 			for (auto it = data.begin(); it != data.end(); it++)
-				m_info.data[i++] = *it;
-			//memcpy(m_info.data, data.begin(), sizeof(DATA_T) * data.size());
+				*Data(i++) = *it;
+			//memcpy(m_handle, data.begin(), sizeof(DATA_T) * data.size());
 		}
 
 		~Array() {
@@ -168,28 +270,41 @@ class Array : public QuickSort < DATA_T > {
 
 		// ----------------------------------------
 
-		void Init (void) { 
-			m_info.data = nullptr; // reinterpret_cast<DATA_T*> (nullptr);
-			m_info.length = 0;
+		void Init (int32_t width = -1, int32_t height = -1) {
+			if (height != -1)
+				m_info.height = height;
+			if (width != -1)
+				m_info.width = width;
+			m_info.offset = 0;
 			m_info.pos = 0;
-			m_info.mode = 0;
 			m_info.wrap = false;
-			memset (&m_info.none, 0, sizeof (m_info.none));
+			if constexpr (std::is_trivially_constructible<DATA_T>::value)
+				memset(&m_none, 0, sizeof(m_none));
+			else
+				new(&m_none) DATA_T();
 			}
 
 		// ----------------------------------------
 
-		void Clear (uint8_t filler = 0, size_t count = 0xffffffff) { 
-			if (m_info.data) 
-				memset (m_info.data, filler, sizeof (DATA_T) * ((count < m_info.length) ? count : m_info.length)); 
+		void Reset(void) {
+			Base::Destroy();
+			m_info.capacity = 0;
+			Init(); // leave width and height intact
+		}
+
+		// ----------------------------------------
+
+		void Clear (uint8_t filler = 0, int32_t count = 0u) {
+			if (Data())
+				memset(Data(), filler, sizeof(DATA_T) * ((count && (count < m_info.capacity)) ? count : m_info.capacity));
 			}
 
 		// ----------------------------------------
 
-		void Fill (DATA_T filler, size_t count = 0xffffffff) {
-			if (m_info.data) {
-				if (count > m_info.length)
-					count = m_info.length;
+		void Fill (DATA_T filler, int32_t count = -1) {
+			if (Data()) {
+				if (count < 0)
+					count = m_info.capacity;
 				for (DATA_T* bufP = Data(); count; count--, bufP++)
 					*bufP = filler;
 			}
@@ -197,17 +312,17 @@ class Array : public QuickSort < DATA_T > {
 
 		// ----------------------------------------
 
-		inline bool IsIndex (size_t i) { 
-			return (m_info.data != nullptr) && (i < m_info.length); 
+		inline bool IsIndex (int32_t i) { 
+			return Data() && (i - m_info.offset >= 0) && (i - m_info.offset < m_info.capacity);
 		}
 		
 		// ----------------------------------------
 
 		inline bool IsElement (DATA_T* elem, bool bDiligent = false) {
-			if (!m_info.data || (elem < m_info.data) || (elem >= m_info.data + m_info.length))
+			if (not Data() or (elem < Data()) or (elem >= Data() + m_info.capacity))
 				return false;	// no data or element out of data
 			if (bDiligent) {
-				size_t i = static_cast<size_t> (reinterpret_cast<uint8_t*> (elem) - reinterpret_cast<uint8_t*> (m_info.data));
+				int32_t i = static_cast<int32_t> (reinterpret_cast<uint8_t*>(elem) - reinterpret_cast<uint8_t*>(Data()));
 				if (i % sizeof (DATA_T))	
 					return false;	// elem in the data, but not properly aligned
 			}
@@ -216,170 +331,260 @@ class Array : public QuickSort < DATA_T > {
 
 		// ----------------------------------------
 
-		inline size_t Index (DATA_T* elem) { 
-			return size_t (elem - m_info.data); 
+		inline int32_t Index (DATA_T* elem) { 
+			return int32_t (elem - Data()) + m_info.offset;
 		}
 
 		// ----------------------------------------
 
-		inline DATA_T* Pointer (size_t i) { 
-			return m_info.data + i; 
+		inline DATA_T* Pointer (int32_t i) { 
+			return Data() + (i - m_info.offset);
 		}
 
 		// ----------------------------------------
 
 		void Destroy (void) { 
-			if (m_info.data) {
-				if (!m_info.mode)
-					delete[] m_info.data;
-				Init ();
-			}
+			Base::Destroy();
+			m_info.capacity = 0;
 		}
 			
 		// ----------------------------------------
 
-		DATA_T *Create (size_t length) {
-			if (m_info.length != length) {
+		DATA_T* Reserve (int32_t capacity, int32_t offset = 0) {
+			if (m_info.capacity != capacity) {
 				Destroy ();
-				if ((m_info.data = new DATA_T [length]))
-					m_info.length = length;
+#if 0
+				Base::Reserve(capacity);
+#else
+				DATA_T* data = new DATA_T[capacity];
+				if (data) {
+					Base::SetBuffer(data, false);
+					m_info.capacity = capacity;
+					Base::m_isStatic = false;
+				}
+#endif
+				m_info.offset = offset;
 			}
-			return m_info.data;
+			return Data();
 		}
 			
 		// ----------------------------------------
 
-		inline DATA_T* Data (size_t i = 0) const { 
-			return m_info.data + i; 
+		inline DATA_T* Reserve(int32_t width, int32_t height, int32_t offset = 0) {
+			Init(width, height);
+			Reserve(width * height);
+			return Data();
+		}
+			
+		// ----------------------------------------
+
+		inline DATA_T* Data() const {
+#ifdef _DEBUG
+			if (not (DATA_T*)(*this))
+				return nullptr;
+#endif
+			return (DATA_T*) (*this);
+		}
+
+		// ----------------------------------------
+
+		inline DATA_T* Data (int32_t i) const { 
+#ifdef _DEBUG
+			if (not Data())
+				return nullptr;
+#endif
+			return Data() + i - m_info.offset;
 		}
 		
 		// ----------------------------------------
 
-		void SetBuffer (DATA_T *data, size_t mode = 0, size_t length = 0xffffffff) {
-			if (m_info.data != data) {
-				if (!(m_info.data = data))
-					Init ();
+		void SetBuffer (DATA_T* data, int32_t capacity) {
+			if (Data() != data) {
+				Destroy();
+				if (not data)
+					Reset();
 				else {
-					m_info.length = length;
-					m_info.mode = mode;
+					Base::SetBuffer(data, true);
+					m_info.capacity = capacity;
 				}
 			}
 		}
 			
 		// ----------------------------------------
 
-		DATA_T* Resize (size_t length, bool bCopy = true) {
-			if (m_info.mode == 2)
-				return m_info.data;
-			if (!m_info.data)
-				return Create (length);
+		inline DATA_T* Realloc(int32_t capacity, bool keepData) {
 			DATA_T* p;
 			try {
-				p = new DATA_T [length];
+				p = new DATA_T[capacity];
 			}
-			catch(...) {
-				return m_info.data;
+			catch (...) {
+				return Data();
 			}
-			if (bCopy) {
-				memcpy (p, m_info.data, ((length > m_info.length) ? m_info.length : length) * sizeof (DATA_T)); 
-				Clear (); // hack to avoid d'tors
+			if (keepData && Data()) {
+				memcpy(p, Data(), ((capacity > m_info.capacity) ? m_info.capacity : capacity) * sizeof(DATA_T));
+				Clear(); // hack to avoid d'tors
 			}
-			m_info.length = length;
-			m_info.pos %= length;
-			delete[] m_info.data;
-			return m_info.data = p;
+			Base::SetBuffer(p, false);
+			return p;
+		}
+
+
+		DATA_T* Resize (int32_t capacity, bool keepData = true) {
+			if (IsStatic())
+				return Reserve (capacity);
+			if (capacity > m_info.capacity) {
+				Realloc(capacity, keepData);
+				m_info.capacity = capacity;
+				m_info.pos %= capacity;
+			}
+			return Data();
 		}
 
 		// ----------------------------------------
 
-		inline const size_t Capacity (void) const { 
-			return m_info.length; 
+		inline const int32_t Capacity (void) const { 
+			return m_info.capacity; 
 		}
 
 		// ----------------------------------------
 
 		inline DATA_T* Current (void) { 
-			return m_info.data ? m_info.data + m_info.pos : nullptr; 
+			return Data(m_info.pos);
 		}
 
 		// ----------------------------------------
 
-		inline size_t Size (void) { 
-			return m_info.length * sizeof (DATA_T); 
+		inline int32_t Size (void) { 
+			return m_info.capacity * sizeof (DATA_T); 
 		}
 
 		// ----------------------------------------
 
-		inline DATA_T& operator[] (const size_t i) {
-			return m_info.data [i]; 
+		inline bool IsValidIndex(int32_t i) {
+			return (i >= 0) && (i < m_info.capacity);
+		}
+
+		// ----------------------------------------
+
+		inline bool IsValidIndex(int32_t x, int32_t y) {
+			return (x >= 0) && (x < m_info.width) && (y >= 0) && (y < m_info.height);
+		}
+
+		// ----------------------------------------
+
+		inline int GetCheckedIndex(int32_t x, int32_t y) {
+			return IsValidIndex (x, y) ? -1 : int (y * m_info.width + x);
+		}
+
+		// ----------------------------------------
+
+		inline DATA_T& operator[] (const int32_t i) {
+			return *Data(i - m_info.offset);
+		}
+
+		// ----------------------------------------
+
+		inline DATA_T* operator()(int32_t x, int32_t y) {
+			return Data(y * m_info.width + x);
+		}
+
+		// ----------------------------------------
+
+		inline DATA_T* operator()(int32_t x, int32_t y, bool rangeCheck) { // always checks range; parameter only to distinguish from other operator()
+			int i = GetCheckedIndex(x, y);
+			return (i < 0) ? nullptr : Data(i);
+		}
+
+		// ----------------------------------------
+
+		inline bool IsNull(DATA_T& v) {
+			return (v == m_none);
+		}
+
+		// ----------------------------------------
+
+		const DATA_T& operator()(int32_t x, int32_t y) const {
+			return *Data(y * m_info.width + x);
+		}
+
+		// ----------------------------------------
+
+		DATA_T* GetRow(int32_t y) {
+			return Data(y * m_info.width);
 		}
 
 		// ----------------------------------------
 		/*
 		inline DATA_T* operator[] (const DATA_T v) {
-			size_t i = BinSearch(v);
-			return (i < 0) ? nullptr : &m_info.data[i];
+			int32_t i = BinSearch(v);
+			return (i < 0) ? nullptr : &m_handle[i];
 		}
 		*/
 		// ----------------------------------------
 
 		inline DATA_T* operator* () const { 
-			return m_info.data; 
+			return Data();
 		}
 
 		// ----------------------------------------
 
 		inline Array<DATA_T>& operator= (Array<DATA_T> const & source) {
-			return _Copy (source.Data (), source.Capacity ()); 
+			return CopyData (source.Data (), source.Capacity ()); 
 		}
 
 		// ----------------------------------------
 
-		inline Array<DATA_T>& operator= (Array<DATA_T>&& source) {
-			return Grab (source);
+		inline Array<DATA_T>& operator= (Array<DATA_T>&& source) noexcept {
+			return Move (source);
 		}
 
 		// ----------------------------------------
 
 		inline Array<DATA_T>& operator= (std::initializer_list<DATA_T> data) {
+			Reserve(int32_t(data.size()));
 			Init();
-			Create(data.size());
-			memcpy(m_info.data, data.begin(), sizeof(DATA_T) * data.size());
+			memcpy(Data(), data.begin(), sizeof(DATA_T) * data.size());
 			return *this;
 		}
 
 		// ----------------------------------------
 
 		inline DATA_T& operator= (DATA_T* source) { 
-			memcpy (m_info.data, source, m_info.length * sizeof (DATA_T)); 
-			return m_info.data [0];
+			if (this != &source)
+				memcpy (Data(), source, m_info.capacity * sizeof (DATA_T));
+			return *Data();
 		}
 
 		// ----------------------------------------
 
-		inline Array<DATA_T>& Copy (Array<DATA_T> const & source, size_t offset = 0) { 
-			return _Copy(source.Data(), source.Capacity(), offset);
-		}
-
-		// ----------------------------------------
-
-		Array<DATA_T>& _Copy(DATA_T const* source, size_t length, size_t offset = 0) {
-			if ((m_info.data && (m_info.length >= length + offset)) || Resize(length + offset, false))
-				memcpy(m_info.data + offset, source, ((m_info.length - offset < length) ? m_info.length - offset : length) * sizeof(DATA_T));
+		Array& CopyData(const Array& source, bool allowStatic = true, int32_t offset = 0) {
+			if ((this != &source) && source.Data()) {
+				if (allowStatic && source.IsStatic()) {
+					Base::m_isStatic = true;
+					BufferHandle() = source.BufferHandle();
+				}
+				else
+					CopyData(source.Data(), source.Capacity(), offset);
+			}
 			return *this;
 		}
 
 		// ----------------------------------------
 
-		Array<DATA_T>& Grab (Array<DATA_T>& source) {
+		Array& CopyData(DATA_T const* sourceData, int32_t count, int32_t offset = 0) {
+			if (Resize(count + offset, false))
+				memcpy(Data(offset), sourceData, std::min(m_info.capacity - offset, count) * sizeof(DATA_T));
+			return *this;
+		}
+
+		// ----------------------------------------
+
+		Array& Move (Array& source) {
 			Destroy ();
-			m_info.data = source.m_info.data;
-			m_info.length = source.m_info.length;
-			m_info.pos = source.m_info.pos;
-			m_info.mode = source.m_info.mode;
-			m_info.wrap = source.m_info.wrap;
-			source.m_info.data = nullptr;
-			source.Destroy ();
+			memcpy(&m_info, &source.m_info, sizeof(ArrayInfo));
+			BufferHandle() = std::move(source.BufferHandle());
+			source.BufferHandle() = nullptr;
+			source.Reset();
 			return *this;
 		}
 
@@ -394,117 +599,116 @@ class Array : public QuickSort < DATA_T > {
 		// ----------------------------------------
 
 		inline DATA_T& operator+= (Array<DATA_T>& source) { 
-			size_t offset = m_info.length;
-			if (m_info.data) 
-				Resize (m_info.length + source.m_info.length);
-			return Copy (source, offset);
+			int32_t offset = m_info.capacity;
+			if (BufferHandle()) 
+				Resize (m_info.capacity + source.m_info.capacity);
+			return CopyData (source, offset);
 		}
 
 		// ----------------------------------------
 
 		inline bool operator== (Array<DATA_T>& other) { 
-			return (m_info.length == other.m_info.length) && !(m_info.length && memcmp (m_info.data, other.m_info.data)); 
+			return (m_info.capacity == other.m_info.capacity) and not (m_info.capacity && memcmp (Data(), other.Data()));
 		}
 
 		// ----------------------------------------
 
 		inline bool operator!= (Array<DATA_T>& other) { 
-			return (m_info.length != other.m_info.length) || (m_info.length && memcmp (m_info.data, other.m_info.data)); 
+			return (m_info.capacity != other.m_info.capacity) or (m_info.capacity && memcmp (Data(), other.Data()));
 		}
 
 		// ----------------------------------------
 
-		inline DATA_T* Start (void) { return m_info.data; }
+		inline DATA_T* Start(void) { return Data(); }
 
 		// ----------------------------------------
 
-		inline DATA_T* End (void) { return (m_info.data && m_info.length) ? m_info.data + m_info.length - 1 : nullptr; }
+		inline DATA_T* End(void) { return (Data() && m_info.capacity) ? Data() + m_info.capacity - 1 : nullptr; }
 
 		// ----------------------------------------
 
 		inline DATA_T* operator++ (void) { 
-			if (!m_info.data)
+			if (not Data())
 				return nullptr;
-			if (m_info.pos < m_info.length - 1)
+			if (m_info.pos < m_info.capacity - 1)
 				m_info.pos++;
 			else if (m_info.wrap) 
 				m_info.pos = 0;
 			else
 				return nullptr;
-			return m_info.data + m_info.pos;
+			return Data() + m_info.pos;
 		}
 
 		// ----------------------------------------
 
 		inline DATA_T* operator-- (void) { 
-			if (!m_info.data)
+			if (not Data())
 				return nullptr;
 			if (m_info.pos > 0)
 				m_info.pos--;
 			else if (m_info.wrap)
-				m_info.pos = m_info.length - 1;
+				m_info.pos = m_info.capacity - 1;
 			else
 				return nullptr;
-			return m_info.data + m_info.pos;
+			return Data() + m_info.pos;
 		}
 
 		// ----------------------------------------
 
-		inline DATA_T* operator+ (size_t i) { 
-			return m_info.data ? m_info.data + i : nullptr; 
+		inline DATA_T* operator+ (const int32_t i) { 
+			return Data() ? Data(i - m_info.offset) : nullptr;
 		}
 
 		// ----------------------------------------
 
-		inline DATA_T* operator- (size_t i) { return m_info.data ? m_info.data - i : nullptr; }
+		inline DATA_T* operator- (const int32_t i) { return Data() ? Data() - (i - m_info.offset) : nullptr; }
 
 		// ----------------------------------------
 
-		Array<DATA_T>& ShareBuffer (Array<DATA_T>& child) {
-			memcpy (&child.m_info, &m_info, sizeof (m_info));
-			if (!child.m_info.mode)
-				child.m_info.mode = 1;
-			return child;
-			}
+		inline bool operator! () { return Data() == nullptr; }
 
 		// ----------------------------------------
 
-		inline bool operator! () { return m_info.data == nullptr; }
+		inline int32_t Pos (void) { return m_info.pos; }
 
 		// ----------------------------------------
 
-		inline size_t Pos (void) { return m_info.pos; }
+		inline void Pos (int32_t pos) { m_info.pos = pos % m_info.capacity; }
 
 		// ----------------------------------------
 
-		inline void Pos (size_t pos) { m_info.pos = pos % m_info.length; }
+		inline void SetOffset(int32_t offset) { m_info.offset = offset; }
+
+		// ----------------------------------------
+
+		inline int32_t GetOffset(void) { return m_info.offset; }
 
 		// ----------------------------------------
 #if 0
-		size_t Read (CFile& cf, size_t nCount = 0, size_t nOffset = 0, bool bCompressed = 0) { 
-			if (!m_info.data)
+		int32_t Read (CFile& cf, int32_t nCount = 0, int32_t nOffset = 0, bool bCompressed = 0) { 
+			if (not Data())
 				return -1;
-			if (nOffset >= m_info.length)
+			if (nOffset >= m_info.capacity)
 				return -1;
-			if (!nCount)
-				nCount = m_info.length - nOffset;
-			else if (nCount > m_info.length - nOffset)
-				nCount = m_info.length - nOffset;
-			return cf.Read (m_info.data + nOffset, sizeof (DATA_T), nCount, bCompressed);
+			if (not nCount)
+				nCount = m_info.capacity - nOffset;
+			else if (nCount > m_info.capacity - nOffset)
+				nCount = m_info.capacity - nOffset;
+			return cf.Read (DataPtr() + nOffset, sizeof (DATA_T), nCount, bCompressed);
 			}
 
 		// ----------------------------------------
 
-		size_t Write (CFile& cf, size_t nCount = 0, size_t nOffset = 0, size_t bCompressed = 0) { 
-			if (!m_info.data)
+		int32_t Write (CFile& cf, int32_t nCount = 0, int32_t nOffset = 0, int32_t bCompressed = 0) { 
+			if (not Data())
 				return -1;
-			if (nOffset >= m_info.length)
+			if (nOffset >= m_info.capacity)
 				return -1;
-			if (!nCount)
-				nCount = m_info.length - nOffset;
-			else if (nCount > m_info.length - nOffset)
-				nCount = m_info.length - nOffset;
-			return cf.Write (m_info.data + nOffset, sizeof (DATA_T), nCount, bCompressed);
+			if (not nCount)
+				nCount = m_info.capacity - nOffset;
+			else if (nCount > m_info.capacity - nOffset)
+				nCount = m_info.capacity - nOffset;
+			return cf.Write (DataPtr() + nOffset, sizeof (DATA_T), nCount, bCompressed);
 			}
 #endif
 
@@ -514,144 +718,160 @@ class Array : public QuickSort < DATA_T > {
 
 		// ----------------------------------------
 
-		inline void SortAscending (size_t left = 0, size_t right = 0) { 
-			if (m_info.data) 
-				QuickSort<DATA_T>::SortAscending (m_info.data, left, (right = 0) ? right : m_info.length - 1); 
+		inline void SortAscending (int32_t left = 0, int32_t right = 0) { 
+			if (Data()) 
+				QuickSort<DATA_T>::SortAscending (Data(), left, (right = 0) ? right : m_info.capacity - 1);
 				}
 
 		// ----------------------------------------
 
-		inline void SortDescending (size_t left = 0, size_t right = 0) {
-			if (m_info.data) 
-				QuickSort<DATA_T>::SortDescending (m_info.data, left, (right > 0) ? right : m_info.length - 1);
+		inline void SortDescending (int32_t left = 0, int32_t right = 0) {
+			if (Data()) 
+				QuickSort<DATA_T>::SortDescending (Data(), left, (right > 0) ? right : m_info.capacity - 1);
 			}
 
 		// ----------------------------------------
 
-		inline void SortAscending (QuickSort<DATA_T>::tComparator compare, size_t left = 0, size_t right = 0) {
-			if (m_info.data) 
-				QuickSort<DATA_T>::SortAscending (m_info.data, left, (right > 0) ? right : m_info.length - 1, compare);
+		inline void SortAscending (QuickSort<DATA_T>::tComparator compare, int32_t left = 0, int32_t right = 0) {
+			if (Data())
+				QuickSort<DATA_T>::SortAscending (Data(), left, (right > 0) ? right : m_info.capacity - 1, compare);
 			}
 
 		// ----------------------------------------
 
-		inline void SortDescending (QuickSort<DATA_T>::tComparator compare, size_t left = 0, size_t right = 0) {
-			if (m_info.data) 
-				QuickSort<DATA_T>::SortDescending (m_info.data, left, (right > 0) ? right : m_info.length - 1, compare);
+		inline void SortDescending (QuickSort<DATA_T>::tComparator compare, int32_t left = 0, int32_t right = 0) {
+			if (Data())
+				QuickSort<DATA_T>::SortDescending (Data(), left, (right > 0) ? right : m_info.capacity - 1, compare);
 			}
 
 		// ----------------------------------------
 
 		template<typename KEY_T>
-		inline size_t Find(KEY_T const& key, int (__cdecl* compare) (DATA_T const&, KEY_T const&), size_t left = 0, size_t right = 0) {
-			return m_info.data ? this->BinSearch(m_info.data, key, compare, left, (right > 0) ? right : m_info.length - 1) : -1;
+		inline int32_t Find(KEY_T const& key, int (__cdecl* compare) (DATA_T const&, KEY_T const&), int32_t left = 0, int32_t right = 0) {
+			return Data() ? this->BinSearch(Data(), key, compare, left, (right > 0) ? right : m_info.capacity - 1) : -1;
 			}
 	};
 
-//-----------------------------------------------------------------------------
+	// =================================================================================================
 
-inline size_t operator- (char* v, Array<char>& a) { return a.Index (v); }
-inline size_t operator- (uint8_t* v, Array<uint8_t>& a) { return a.Index (v); }
-inline size_t operator- (int16_t* v, Array<int16_t>& a) { return a.Index (v); }
-inline size_t operator- (uint16_t* v, Array<uint16_t>& a) { return a.Index (v); }
-inline size_t operator- (uint32_t* v, Array<uint32_t>& a) { return a.Index (v); }
-inline size_t operator- (size_t* v, Array<size_t>& a) { return a.Index (v); }
+inline int32_t operator- (char* v, Array<char>& a) { return a.Index (v); }
+inline int32_t operator- (uint8_t* v, Array<uint8_t>& a) { return a.Index (v); }
+inline int32_t operator- (int16_t* v, Array<int16_t>& a) { return a.Index (v); }
+inline int32_t operator- (uint16_t* v, Array<uint16_t>& a) { return a.Index (v); }
+inline int32_t operator- (uint32_t* v, Array<uint32_t>& a) { return a.Index (v); }
+inline int32_t operator- (int32_t* v, Array<int32_t>& a) { return a.Index (v); }
 
-//-----------------------------------------------------------------------------
+// =================================================================================================
 
 class CharArray : public Array<char> {
 	public:
 		inline char* operator= (const char* source) { 
-			size_t l = size_t (strlen (source) + 1);
-			if ((l > this->m_info.length) && !this->Resize (this->m_info.length + l))
+			int32_t l = int32_t (strlen (source) + 1);
+			if ((l > this->m_info.capacity) and not this->Resize (this->m_info.capacity + l))
 				return nullptr;
-			memcpy (this->m_info.data, source, l);
-			return this->m_info.data;
+			memcpy (this->Data(), source, l);
+			return this->Data();
 		}
 };
 
-//-----------------------------------------------------------------------------
+// =================================================================================================
+
+template<typename DATA_T>
+using SharedArray = Array<DATA_T, SharedPointer<DATA_T>>;
 
 class ByteArray : public Array<uint8_t> {
 public:
-	ByteArray(const size_t nLength) {
+	ByteArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
 class ShortArray : public Array<int16_t> {
 public:
-	ShortArray(const size_t nLength) {
+	ShortArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
 class UShortArray : public Array<uint16_t> {
 public:
-	UShortArray(const size_t nLength) {
+	UShortArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
 class IntArray : public Array<int32_t> {
 public:
-	IntArray(const size_t nLength) {
+	IntArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
-class UIntArray : public Array<uint32_t> {
+class UIntArray : public Array<int32_t> {
 public:
-	UIntArray(const size_t nLength) {
+	UIntArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
 class SizeArray : public Array<size_t> {
 public:
-	SizeArray(const size_t nLength) {
+	SizeArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
 class FloatArray : public Array<float> {
 public:
-	FloatArray(const size_t nLength) {
+	FloatArray(const int32_t nLength) {
+		Reserve(nLength);
 		Init();
-		Create(nLength);
 	}
 };
 
+// =================================================================================================
 
-//-----------------------------------------------------------------------------
-
-template < class DATA_T, size_t length > 
+template < class DATA_T, int32_t capacity > 
 class StaticArray : public Array < DATA_T > {
 
-	class StaticArrayData {
-		public:
-			DATA_T		data [length];
-			};
-
 	protected:
-		StaticArrayData	m_info;
+		DATA_T		m_buffer[capacity];
 
 	public:
-		StaticArray () { Create (length); }
+		StaticArray () { Reserve (capacity); }
 
-		DATA_T *Create (size_t _length) {
-			this->SetBuffer (m_info.data, 2, _length); 
-			return m_info.data;
+		DATA_T *Reserve (int32_t capacity) {
+			this->SetBuffer (m_buffer, capacity); 
+			return m_buffer;
 			}
 		void Destroy (void) { }
 	};
 
-//-----------------------------------------------------------------------------
+// =================================================================================================
 
-#endif // ! use std::vector
+template < typename DATA_T >
+class Array2D : public Array < DATA_T > {
+public:
+	int32_t	m_rows;
+	int32_t	m_cols;
+
+	DATA_T& operator()(int32_t x, int32_t y) {
+		return this->Data(x * m_cols + y);
+	}
+
+	const DATA_T& operator()(int32_t x, int32_t y) const {
+		return this->Data(x * m_cols + y);
+	}
+
+	DATA_T* GetRow(int32_t y) {
+		return this->Data(y * m_cols);
+	}
+};
+
+// =================================================================================================

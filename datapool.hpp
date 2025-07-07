@@ -4,126 +4,143 @@
 
 #pragma once
 
-#include "array.hpp"
+#include <new>
+#include <cstdlib>
 
-//-----------------------------------------------------------------------------
-// list of data buffers for other data containers
+#include "basicdatapool.hpp"
+#include "avltree.hpp"
 
-template < class _T > 
-class DataPool {
+// =================================================================================================
 
-	template < class _U > 
-	class PoolElem {
-		public:
-			int32_t	prev;
-			int32_t	next;
-			_U		data;
-		};
+template <typename KEY_T, typename ITEM_T>
+class DataPool : public BasicDataPool<ITEM_T> {
 
-	class PoolBuffer : public Array< PoolElem <_T> > {};
+	using Comparator = typename AVLTreeTraits<KEY_T, int>::Comparator;
 
-	private:
-		PoolBuffer		m_buffer;
-		//_T*			m_null;
-		int32_t			m_free;
-		int32_t			m_used;
+	using DataProcessor = typename AVLTreeTraits<KEY_T, int>::DataProcessor;
 
-	public:
-		DataPool () { Init (); }
-		~DataPool() { Destroy (); }
+	using ItemProcessor = bool(*) (void* t, ITEM_T&);
 
-		//_T& operator[] (uint32_t i) { return m_buffer [i].data; }
+	using ItemMap = AVLTree<KEY_T, int>;
 
-		inline void Init (void) { 
-			m_buffer.Init ();
-			m_free = 
-			m_used = -1; 
-			}
+private:
+	ItemMap*	m_usedItems;
+	KEY_T		m_itemKey;
 
-		inline void Destroy (void) { 
-			m_buffer.Destroy (); 
-			Init (); 
-			}
 
-		inline bool Create (uint32_t size, const char* pszName = "DataPool::m_buffer") { 
-			Destroy ();
-			if (!m_buffer.Create (size, pszName))
-				return false;
-			uint32_t i;
-			for (i = 0; i < size; i++) {
-				m_buffer [i].prev = i - 1;
-				m_buffer [i].next = i + 1;
-				}
-			m_buffer [i - 1].next = -1;
-			m_free = 0;
-			m_used = -1;
+public:
+	DataPool()
+		: BasicDataPool<ITEM_T>(), m_usedItems(nullptr), m_itemKey(0) //nullptr)
+	{
+	}
+
+
+	~DataPool() {
+		Destroy();
+	}
+
+
+private:
+	bool Setup(int32_t capacity, Comparator comparator, void* context, bool createOnce) {
+		if (createOnce and this->m_isCreated)
 			return true;
-			}
+		if (not this->BasicDataPool<ITEM_T>::Setup(capacity, createOnce))
+			return false;
+		void* buffer = malloc(sizeof(ItemMap));
+		if (not buffer) {
+			Destroy();
+			return false;
+		}
+		m_usedItems = new(buffer) ItemMap(capacity);
+		m_usedItems->SetComparator(comparator, context);
+		return true;
+	}
 
-		inline _T* Pop (void) { 
-			if (m_free < 0)
-				return NULL;
-			PoolElem<_T>& e = m_buffer [m_free];
-			int32_t next = e.next;
-			e.prev = -1;
-			e.next = m_used;
-			if (m_used >= 0)
-				m_buffer [m_used].prev = m_free;
-			m_used = m_free;
-			m_free = next;
-			return &e.data; 
-			}
 
-		void Push (uint32_t i) {
-			if (m_used < 0)
-				return;
-			PoolElem<_T>& e = m_buffer [i];
-			if (e.prev < 0)
-				m_used = e.next;
-			else
-				m_buffer [e.prev].next = e.next;
-			if (e.next >= 0)
-				m_buffer [e.next].prev = e.prev;
-			e.prev = -1;
-			e.next = m_free;
-			if (m_free >= 0)
-				m_buffer [m_free].prev = i;
-			m_free = i;
-			}
+public:
+	inline bool Create(int32_t capacity, Comparator comparator, void* context = nullptr, bool createOnce = true) {
+		return this->m_isCreated = Setup(capacity, comparator, context, createOnce);
+	}
 
-		inline int32_t LastIndex (void) { return m_used; }
 
-		inline _T* GetNext (int32_t& nCurrent) { 
-			if ((nCurrent < 0) || !m_buffer.Data ())
-				return NULL;
-			PoolElem<_T>* e;
-			try {
-				e = &m_buffer [nCurrent]; 
+	void Destroy(void) {
+		if (m_usedItems) {
+			//delete m_usedItems;
+			m_usedItems->~ItemMap();
+			free(m_usedItems);
+			m_usedItems = nullptr;
+		}
+		this->BasicDataPool<ITEM_T>::Destroy();
+	}
+
+
+	ITEM_T* FindItem(const KEY_T& key) {
+		if (not m_usedItems)
+			return nullptr;
+		int* itemIndex = m_usedItems->Find(key);
+		if (not itemIndex)
+			return nullptr;
+		return this->m_itemPool + *itemIndex;
+	}
+
+
+	ITEM_T* Claim(const KEY_T& key) {
+//		if (not key)
+//			return nullptr;
+		if (not m_usedItems)
+			return nullptr;
+		int itemIndex;
+		ITEM_T* item = this->BasicDataPool<ITEM_T>::Claim(itemIndex);
+		if (not item)
+			return nullptr;
+		KEY_T nullKey = (KEY_T)0;
+		m_usedItems->Insert2(key, itemIndex, nullKey, true);
+		int* pi = m_usedItems->Find(key);
+		if (not pi) {
+			fprintf(stderr, "AVL tree error (%lld not found)\n", ptrdiff_t(key));
+			m_usedItems->Find(key);
+		}
+		fprintf(stderr, "claiming memory block #%d\n", itemIndex);
+		return item;
+	}
+
+
+	ITEM_T* Release(const KEY_T& key) {
+		if (not m_usedItems)
+			return nullptr;
+		int itemIndex = -1;
+		{
+			int* dataNode = m_usedItems->Find(key);
+			if (not dataNode)
+				fprintf(stderr, "                                                item index #%d not found\n", itemIndex);
+		}
+		if (not m_usedItems->Extract(key, itemIndex)) {
+			char* address = reinterpret_cast<char*>(key) + 11;
+			ITEM_T* itemPool = this->BasicDataPool<ITEM_T>::GetDataPool();
+			int* freeItems = this->BasicDataPool<ITEM_T>::GetFreeItems();
+			for (int i = this->BasicDataPool<ITEM_T>::FreeItemCount(), j = this->BasicDataPool<ITEM_T>::Capacity(); i < j; i++) {
+				int h = freeItems[i];
+				if (itemPool[h].address == address) {
+					itemIndex = h;
+					break;
 				}
-			catch(...) {
-#if DBG
-				ArrayError ("Data pool element chain broken.");
-#endif
-				return NULL;
-				}
-			nCurrent = e->next;
-			return &e->data;
 			}
-
-		inline _T* GetFirst (int32_t& nCurrent) { 
-			if (nCurrent < 0)
-				nCurrent = m_used;
-			return GetNext (nCurrent);
-			}
-
-		inline int32_t Size (void) { return m_buffer.Size (); }
-
-		inline int32_t UsedList (void) { return m_used; }
-		inline int32_t FreeList (void) { return m_free; }
-
-		inline _T& operator[] (uint32_t i) { return m_buffer [i].data; }
-		inline _T* operator+ (uint32_t i) { return &m_buffer [i].data; }
-	};
+			if (itemIndex < 0)
+				return nullptr;
+		}
+		else {
+			typename AVLTree<KEY_T, int>::AVLNode* dataNode = m_usedItems->FindData(itemIndex);
+			if (dataNode)
+				fprintf(stderr, "                                                duplicate item index #%d\n", itemIndex);
+		}
+		fprintf(stderr, "                                                releasing memory block #%d\n", itemIndex);
+		return this->BasicDataPool<ITEM_T>::Release(itemIndex);
+	}
 
 
-//-----------------------------------------------------------------------------
+	AVLTree<KEY_T, int>& UsedItems(void) {
+		return *m_usedItems;
+	}
+};
+
+// =================================================================================================

@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include <variant>
+#include <utility>
+#include <functional>
+#include <type_traits>
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -11,618 +16,937 @@
 #include <cstddef>
 #include <utility>
 #include <iostream>
+
+#include "allocator.h"
+#include "type_helper.hpp"
 #include "array.hpp"
 
-#if 0
-
-#include <list>
-
-template < class DATA_T >
-class List : public std::list {
-
-private:
-	auto DataPtr (int i) {
-		for (auto iter = this->begin (); iter != this->end (); iter++)
-			if (!i--)
-				return iter;
-		return nullptr;
-	}
-
-public:
-	inline bool Append (DATA_T data) {
-		return this->push_back (data);
-	}
-
-	DATA_T* Add (int i) {
-		auto p = DataPtr (i);
-		if (p != nullptr)
-			p = this->emplace (p);
-		return (p == nullptr) ? nullptr ? *p;
-};
-
-#else
-
-#define USE_DATA_PTR	0
-#if USE_DATA_PTR
-#	define DATA_PTR(data)	(data)
-#	define DATA_VALUE(data)	(*(data))
-#else
-#	define DATA_PTR(data)	(&data)
-#	define DATA_VALUE(data)	(data)
-#endif
-
 //-----------------------------------------------------------------------------
 
-template < typename DATA_T >
-class List {
+template < typename ITEM_T>
+class List
+{
+	template<typename DATA_T>
+	struct GetDataType {
+		using type = DATA_T;
+	};
 
-	private:
-		class ListNode;
+	template<typename DATA_T>
+	struct GetDataType<SharedPointer<DATA_T>> {
+		using type = DATA_T;
+	};
 
-		//----------------------------------------
+	template<typename DATA_T>
+	struct IsSharedPointer : std::false_type {};
 
-		class ListNodePtr {
-			public:
-				ListNode* m_ptr;
+	template<typename DATA_T>
+	struct IsSharedPointer<SharedPointer<DATA_T>> : std::true_type {};
 
-				explicit ListNodePtr () : m_ptr (nullptr) {}
-/*
-				ListNodePtr(const ListNodePtr& other) {
-					m_ptr = other.m_ptr;
-				}
-*/
-				explicit ListNodePtr(ListNode * ptr) : m_ptr(ptr) {}
+	using ItemType = ITEM_T;
+	using DataType = typename GetDataType<ITEM_T>::type;
+	//using ItemFilter = bool (*)(ITEM_T*);
+	using ItemFilter = std::function<bool>(ITEM_T*);
 
-				ListNodePtr& operator= (ListNodePtr other) {
-					m_ptr = other.m_ptr;
-					return *this;
-				}
+	typedef int(__cdecl* tComparator) (const ItemType*, const ItemType*);
 
-				ListNodePtr& operator= (ListNode * p) {
-					m_ptr = p;
-					return *this;
-				}
+public:
+	class ListNode;
 
-				void operator++ (int) {
-					*this = m_ptr->m_next;
-				}
+	//----------------------------------------
 
-				void operator-- (int) {
-					*this = m_ptr->m_prev;
-				}
+	class ListNodePtr {
+	public:
+		ListNode* m_nodePtr;
 
-				ListNodePtr operator+ (int n) {
-					ListNodePtr ptr = *this;
-					for (; n; n--)
-						ptr++;
-					return ptr;
-				}
+		ListNodePtr() : m_nodePtr(nullptr) {}
 
-				ListNodePtr operator- (int n) {
-					ListNodePtr ptr = *this;
-					for (; n; n--)
-						ptr--;
-					return ptr;
-				}
+		ListNodePtr(const ListNodePtr& other) {
+			m_nodePtr = other.m_nodePtr;
+		}
 
-				ListNode* operator->() const {
-					return m_ptr;
-				}
+		explicit ListNodePtr(ListNode* p) : m_nodePtr(p) {}
 
-				bool operator== (const ListNodePtr& other) {
-					return m_ptr == other.m_ptr;
-				}
+		ListNodePtr& operator= (ListNodePtr other) {
+			m_nodePtr = other.m_nodePtr;
+			return *this;
+		}
 
-				bool operator!= (const ListNodePtr& other) {
-					return m_ptr != other.m_ptr;
-				}
+		ListNodePtr& operator= (ListNode* p) {
+			m_nodePtr = p;
+			return *this;
+		}
 
-				operator bool() {
-					return (m_ptr != nullptr);
-				}
-			};
+		ListNodePtr& operator= (const ListNode* p) const {
+			m_nodePtr = p;
+			return *this;
+		}
 
-		//----------------------------------------
+		bool operator== (const ListNodePtr* other) {
+			return m_nodePtr == other->m_nodePtr;
+		}
 
-		class ListNode {
-			public:
-				ListNodePtr	m_prev;
-				ListNodePtr	m_next;
-#if USE_DATA_PTR
-				DATA_T *	m_data;
-#else
-				DATA_T		m_data;
+		bool operator!= (const ListNodePtr* other) const {
+			return m_nodePtr != other->m_nodePtr;
+		}
+
+		bool operator== (const ListNodePtr& other) const {
+			return m_nodePtr == other.m_nodePtr;
+		}
+
+		bool operator!= (const ListNodePtr& other) const {
+			return m_nodePtr != other.m_nodePtr;
+		}
+
+		bool operator== (const ListNode* nodePtr) const {
+			return m_nodePtr == nodePtr;
+		}
+
+		bool operator!= (const ListNode* nodePtr) const {
+			return m_nodePtr != nodePtr;
+		}
+
+		ListNodePtr& operator++ () {
+			m_nodePtr = m_nodePtr->m_succ;
+			return *this;
+		}
+
+		ListNodePtr& operator-- () {
+			m_nodePtr = m_nodePtr->m_pred;
+			return *this;
+		}
+
+		ListNodePtr operator++ (int) {
+			ListNodePtr p(m_nodePtr);
+			m_nodePtr = m_nodePtr->m_succ;
+			return p;
+		}
+
+		ListNodePtr operator-- (int) {
+			ListNodePtr p(m_nodePtr);
+			m_nodePtr = m_nodePtr->m_pred;
+			return p;
+		}
+
+		ListNodePtr operator+ (int n) {
+			ListNodePtr p = *this;
+			for (; n; n--)
+				++p;
+			return p;
+		}
+
+		ListNodePtr operator- (int n) {
+			ListNodePtr p = *this;
+			for (; n; n--)
+				--p;
+			return p;
+		}
+
+		ListNode* operator->() const {
+			return m_nodePtr;
+		}
+
+		operator bool() {
+			return (m_nodePtr != nullptr);
+		}
+
+		operator ListNode* const() {
+			return m_nodePtr;
+		}
+
+		inline ListNodePtr& Pred(void) {
+			return m_nodePtr->m_pred;
+		}
+
+		inline ListNodePtr& Succ(void) {
+			return m_nodePtr->m_succ;
+		}
+
+		ItemType& DataValue(void) {
+			return m_nodePtr->DataValue();
+		}
+
+		ItemType& DataValue() const {
+			return m_nodePtr->DataValue();
+		}
+
+		DataType* DataPointer() {
+			return m_nodePtr->DataPointer();
+		}
+
+		ItemType& DataItem() {
+			return m_nodePtr->DataItem();
+		}
+
+	};
+
+	//----------------------------------------
+
+	class ListNode
+	{
+		public:
+			ListNodePtr	m_pred;
+			ListNodePtr	m_succ;
+			ItemType	m_dataItem;
+			bool		m_manageData;
+
+			explicit ListNode() {
+				//m_dataItem = ItemType();
+				InitializeAnyType(m_dataItem);
+				m_manageData = true;
+			}
+
+			ListNode(const ItemType& dataValue, bool manageData = false)
+				: m_pred(nullptr), m_succ(nullptr), m_dataItem(dataValue), m_manageData(manageData)
+			{
+}
+
+			ListNode(ItemType&& dataValue, bool manageData = false)
+				: m_pred(nullptr), m_succ(nullptr), m_dataItem(dataValue), m_manageData(manageData)
+			{
+			}
+
+			ListNode(const ListNode& other) {
+				m_dataItem = other.m_dataItem;  // normale Kopie
+				m_manageData = other.m_manageData;
+				m_pred = nullptr;
+				m_succ = nullptr;
+			}
+
+			inline ListNode* Pred(void) {
+				return m_pred;
+			}
+
+			inline ListNode* Succ(void) {
+				return m_succ;
+			}
+
+			ItemType& DataValue(void) {
+#if 0
+				if constexpr (IsSharedPointer<ITEM_T>::value)
+					return *((DataType*)m_dataItem);
+				else
 #endif
+					return m_dataItem;
+			}
 
-#if USE_DATA_PTR
-				explicit ListNode() : m_prev (nullptr), m_next (nullptr), m_data (nullptr) {}
-#else
-				explicit ListNode () : m_prev (nullptr), m_next (nullptr) {}
+			ItemType& DataValue() const {
+#if 0
+				if constexpr (IsSharedPointer<ITEM_T>::value)
+					return *((DataType*)m_dataItem);
+				else
 #endif
+					return m_dataItem;
+			}
 
-				~ListNode() {
-#if USE_DATA_PTR
-					if (m_data) {
-						delete m_data;
-						m_data = nullptr;
+			DataType* DataPointer() {
+#if 1
+				if constexpr (IsSharedPointer<ITEM_T>::value)
+					return (DataType*)m_dataItem;
+				else
+#endif
+					return &m_dataItem;
+			}
+
+			const DataType* DataPointer() const {
+#if 1
+				if constexpr (IsSharedPointer<ITEM_T>::value)
+					return (DataType*)m_dataItem;
+				else
+#endif
+					return &m_dataItem;
+			}
+
+			ItemType& DataItem() {
+				return m_dataItem;
+			}
+
+			const ItemType& DataItem() const {
+				return m_dataItem;
+			}
+
+			inline void Unlink(void) {
+				if (m_pred)
+					m_pred->m_succ = m_succ;
+				if (m_succ)
+					m_succ->m_pred = m_pred;
+				if (m_pred)
+					m_pred = nullptr;
+				if (m_succ)
+					m_succ = nullptr;
+			}
+
+			operator ItemType& () {
+				return DataValue();
+			}
+
+			~ListNode() {
+				Unlink();
+				if constexpr (std::is_pointer_v<ItemType>) {
+					if (m_manageData) {
+						delete m_dataItem;
+						m_dataItem = nullptr;
 					}
-#endif
 				}
+			}
+	};
 
-		};
+	//----------------------------------------
 
-		//----------------------------------------
-
-		class Iterator {
-
-			private:
-				ListNodePtr 	m_first;
-				ListNodePtr 	m_last;
-				ListNodePtr 	m_current;
-				size_t			m_index;
-
-			public:
-				explicit Iterator() {}
-
-				Iterator(List< DATA_T >& l) : m_first(l.First ()), m_last(l.Last () + 1), m_index (0) {}
-
-				operator bool() const { return m_current != nullptr; }
-
-				//DATA_T* operator*() const { return &m_current->m_data; }
-				// return the current value and the index of the value in the list
-				constexpr std::pair<size_t, DATA_T&> operator*() const { 
-					return std::pair<size_t, DATA_T&> {m_index, DATA_VALUE (m_current->m_data) };
-				}
-
-				Iterator& operator++() {
-					m_current++;
-					m_index++;
-					return *this;
-				}
-
-				Iterator& operator--() {
-					m_current--;
-					return *this;
-				}
-
-				bool operator== (Iterator& other) {
-					return m_current == other.m_current;
-				}
-
-				bool operator!= (Iterator& other) {
-					return m_current != other.m_current;
-				}
-
-				//Iterator& Start(void) {
-				constexpr Iterator& First(void) {
-					m_index = 0;
-					m_current = m_first;
-					return *this;
-				}
-
-				Iterator& Last(void) {
-					m_current = m_last;
-					return *this;
-				}
-			};
-
-	// ----------------------------------------
+	class Iterator {
 
 	private:
-		ListNode		m_head;
-		ListNode		m_tail;
-#if USE_DATA_PTR
-		DATA_T*		m_none;
-#else
-		DATA_T		m_none;
-#endif
-		ListNodePtr	m_headPtr;
-		ListNodePtr 	m_tailPtr;
-		ListNodePtr 	m_nullPtr;
-		size_t		m_length;
-		bool		m_result;
+		ListNodePtr 	m_first;
+		ListNodePtr 	m_last;
+		ListNodePtr 	m_current;
+		int32_t			m_index;
+		int32_t			m_length;
 
 	public:
-		void Destroy(void) {
-			if (m_headPtr) {
-				ListNodePtr p, n;
-				for (n = m_headPtr + 1; n != m_tailPtr; ) {
-					p = n;
-					n++;
-					if (p.m_ptr) {
-						delete p.m_ptr;
-						p.m_ptr = nullptr;
-					}
-				}
-			}
-#if USE_DATA_PTR
-			if (m_none) {
-				delete m_none;
-				m_none = nullptr;
-			}
-#endif
-			Init();
+		explicit Iterator() {}
+
+		Iterator(List<ItemType>& l)
+			: m_first(l.First()), m_last(l.Last()), m_index(0), m_length(l.Length())
+		{
+			m_current = m_first;
 		}
 
-		List<DATA_T>& Copy(const List<DATA_T> & other) {
-			Destroy();
-			ListNodePtr p = other.m_headPtr;
-			for (p++; p != other.m_tailPtr; p++)
-				Insert (-1, DATA_VALUE (p.m_ptr->m_data));
+		Iterator(const List<ItemType>& l)
+			: m_first(l.First()), m_last(l.Last()), m_index(0), m_length(0)
+		{
+			m_current = m_first;
+		}
+
+		operator bool() const { return m_current != nullptr; }
+#if 0
+		ItemType* operator*() {
+			return m_current.DataPointer();
+		}
+
+		const ItemType* operator*() const {
+			return m_current;
+		}
+#endif
+		//ItemType* operator*() const { return &m_current->m_dataItem; }
+		// return the current value and the index of the value in the list
+		ItemType& operator*() {
+			return m_current.DataValue();
+		}
+
+		ItemType* operator->() {
+			return m_current.DataPointer();
+		}
+
+		inline Iterator& operator++() {
+			++m_current;
+			++m_index;
 			return *this;
 		}
 
-		inline void Init(void) {
-			m_headPtr = &m_head;
-			m_tailPtr = &m_tail;
-			m_headPtr->m_prev = m_tailPtr->m_next = nullptr;
-			m_headPtr->m_next = &m_tail;
-			m_tailPtr->m_prev = &m_head;
-#if USE_DATA_PTR
-			m_none = new DATA_T;
-#endif
+		inline Iterator& operator--() {
+			--m_current;
+			--m_index;
+			return *this;
+		}
+
+		inline Iterator& operator++(int) {
+			m_current++;
+			m_index++;
+			return *this;
+		}
+
+		inline Iterator& operator--(int) {
+			m_current--;
+			m_index--;
+			return *this;
+		}
+
+		bool operator==(const Iterator& other) const {
+			return m_current == other.m_current;
+		}
+
+		bool operator!=(const Iterator& other) const {
+			return m_current != other.m_current;
+		}
+
+		bool operator==(const ListNodePtr& other) const {
+			return m_current == other;
+		}
+
+		bool operator!=(const ListNodePtr& other) const {
+			return m_current != other;
+		}
+
+		Iterator operator+(int n) const {
+			Iterator it = *this;
+			while ((n-- > 0) && (it != m_last)) {
+				++it;
+			}
+			return it;
+		}
+
+		Iterator operator-(int n) const {
+			Iterator it = *this;
+			while ((n-- > 0) && (it != m_first)) {
+				--it;
+			}
+			return it;
+		}
+
+		//Iterator& Start(void) {
+		constexpr Iterator& First(void) {
+			m_index = 0;
+			m_current = m_first;
+			return *this;
+		}
+
+		Iterator& Last(void) {
+			m_current = m_last;
+			return *this;
+		}
+
+		inline int32_t Index(void) {
+			return m_index;
+		}
+	};
+
+	// ----------------------------------------
+	// This list implementation uses two dummy entries as head and tail elements,
+	// as this makes many operations on the list much easier.
+	// Since the list can always store a ItemType*, head and tail will be initialized 
+	// with a ItemType*, which is quite memory efficient.
+
+protected:
+	const char* m_name;
+	ListNode*	m_head;
+	ListNode*	m_tail;
+	ListNodePtr	m_headPtr;
+	ListNodePtr	m_tailPtr;
+	ItemType*	m_none;
+
+	// holds a copy of the median data for sorting; one global variable should work 
+	// as it is only used during the sorting part and not during the recursive descent
+	ItemType	m_median;
+	tComparator	m_compare;
+
+	int32_t		m_length;
+	bool		m_result;
+	bool		m_isValid;
+
+public:
+	inline void Reset(void) {
+		m_head = nullptr;
+		m_tail = nullptr;
+		m_headPtr = nullptr;
+		m_tailPtr = nullptr;
+		m_length = 0;
+		m_isValid = false;
+	}
+
+
+	inline void Init(void) {
+		if (not m_isValid) {
+			m_isValid = true;
+			m_head = new ListNode();
+			m_tail = new ListNode();
+			if constexpr (std::is_pointer_v<ItemType>)
+				m_none = nullptr;
+			else
+				m_none = new ItemType();
+			m_headPtr = m_head;
+			m_tailPtr = m_tail;
+			m_headPtr.Pred() =
+			m_tailPtr.Succ() = nullptr;
+			m_headPtr.Succ() = m_tail;
+			m_tailPtr.Pred() = m_head;
 			m_length = 0;
 		}
+	}
 
-		Iterator begin() {
-			return Iterator(*this).First();
-		}
-
-		Iterator end() {
-			return Iterator(*this).Last();
-		}
-
-		inline ListNodePtr Head(void) {
-			return m_headPtr;
-		}
-
-		inline ListNodePtr Tail(void) {
-			return m_tailPtr;
-		}
-
-		inline ListNodePtr First(void) {
-			return m_head.m_next;
-		}
-
-		inline ListNodePtr Last(void) {
-			return m_tail.m_prev;
-		}
-
-		inline size_t Length(void) {
-			return m_length;
-		}
-
-		inline const bool Empty(void) const {
-			return m_length == 0;
-		}
-
-		inline DATA_T& operator[] (const size_t i) {
-			ListNodePtr p = NodePtr(int (i), m_headPtr + 1, m_tailPtr - 1);
-			if (p) {
-				m_result = true;
-				return DATA_VALUE (p->m_data);
+	void Clear(void) {
+		if (m_head) {
+			for (ListNodePtr n = m_headPtr + 1; n != m_tailPtr; ) {
+				ListNodePtr p = n;
+				++n;
+				if (p.m_nodePtr) {
+					delete p.m_nodePtr;
+					p.m_nodePtr = nullptr;
+				}
 			}
+		}
+	}
+
+	void Destroy(void) {
+		if (m_isValid) {
+			m_isValid = false;
+			Clear();
+			delete m_head;
+			delete m_tail;
+			delete m_none;
+			m_head = 
+			m_tail = nullptr;
+			m_none = nullptr;
+		}
+	}
+
+	List<ItemType>& Copy(const List<ItemType>& other) {
+		if (other.Length()) {
+			for (ListNode* pn = other.First(); pn != other.GetTail(); pn = pn->Succ())
+				AddNode(-1, new ListNode(*pn));
+		}
+		return *this;
+	}
+
+	Iterator begin() const {
+		return Iterator(*this).First();
+	}
+
+	Iterator end() const {
+		return Iterator(*this).Last();
+	}
+
+	Iterator rbegin() const {
+		return Iterator(*this).ReverseFirst();
+	}
+
+	Iterator rend() const {
+		return Iterator(*this).ReverseLast();
+	}
+
+	inline ListNode* GetHead(void) const {
+		return m_head;
+	}
+
+	inline ListNode* GetTail(void) const {
+		return m_tail;
+	}
+
+	inline ListNode* First(void) const {
+		return m_length ? m_head->m_succ : m_head;
+	}
+
+	inline ListNode* Last(void) const {
+		return m_length ? m_tail : m_head;
+	}
+
+	inline ListNode* ReverseFirst(void) const {
+		return m_length ? m_tail->m_pred : m_tail;
+	}
+
+	inline ListNode* ReverseLast(void) const {
+		return m_length ? m_head : m_tail;
+	}
+
+	inline int32_t Length(void) {
+		return m_length;
+	}
+
+	inline const int32_t Length(void) const {
+		return m_length;
+	}
+
+	inline const bool IsAvailable(void) const {
+		return m_head != nullptr;
+	}
+
+	inline const bool IsEmpty(void) const {
+		return m_length == 0;
+	}
+
+	inline ItemType& operator[] (int i) {
+		ListNode* node = NodePtrAt(i);
+		if (node) {
 			m_result = true;
-			return DATA_VALUE (m_none);
+			return node->DataItem();
 		}
+		m_result = false;
+		return *m_none;
+	}
 #if 0
-		inline DATA_T& operator[] (DATA_T& d) {
-			int i = Find(d);
-			if (i < 0)
-				return DATA_VALUE (m_none);
-			ListNodePtr p = NodePtr(int(i), m_headPtr + 1, m_tailPtr - 1);
-			return p ? DATA_VALUE (p->m_data) : DATA_VALUE (m_none);
-		}
+	inline DataType& operator[] (ItemType& d) {
+		int i = Find(d);
+		if (i < 0)
+			return *m_none;
+		ListNodePtr p = NodePtrAt(int(i));
+		return p ? p->DataValue() : *m_none;
+	}
 #endif
-		inline List<DATA_T>& operator= (List<DATA_T> const& other) {
-			Copy(other);
+	inline List<ItemType>& operator= (List<ItemType> const& other) {
+		Copy(other);
+		return *this;
+	}
+
+	inline List<ItemType>& operator= (List<ItemType>&& other) noexcept {
+		return Move(other);
+	}
+
+	inline List<ItemType>& operator= (std::initializer_list<ItemType> data) {
+		Destroy();
+		Init();
+		for (auto& v : data)
+			Append(v);
+		return *this;
+	}
+
+	List<ItemType>(const char* name = "", int32_t segmentLength = 1)
+		: m_name(name), m_length(0), m_result(true), m_isValid(false)
+	{
+		Init();
+	}
+
+	List<ItemType>(List<ItemType> const& other)
+		: m_length(0), m_result(true), m_isValid(false)
+	{
+		Init();
+		Copy(other);
+	}
+
+	List<ItemType>(List<ItemType>&& other) noexcept
+		: m_length(0), m_result(true), m_isValid(false)
+	{
+		Init();
+		Move(other);
+	}
+
+	explicit List<ItemType>(ItemType& data)
+		: m_length(0), m_result(true), m_isValid(false)
+	{
+		Init();
+		Append(data);
+	}
+
+	explicit List<ItemType>(Array<ItemType>& data, bool manageData = false)
+		: m_length(0), m_result(true), m_isValid(false)
+	{
+		Init();
+		for (auto const& v : data)
+			Append(*v, manageData);
+	}
+
+	List<ItemType>(std::initializer_list<ItemType> data, bool manageData = false, int32_t segmentSize = 0)
+		: m_length(0), m_result(true), m_isValid(false)
+	{
+		Init();
+		for (auto const& d : data)
+			Append(d, manageData);
+	}
+
+	~List() {
+		Destroy();
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	inline ListNode* NodePtrAt(int i) {
+		return NodePtrAt(i, m_headPtr + 1, m_tailPtr - 1);
+	}
+
+
+	ListNode* NodePtrAt(int i, ListNode* first, ListNode* last) {
+		if (i == 0)
+			return first;
+		if (i == -1)
+			return last;
+
+		if (not IsAvailable() or (abs(i) > m_length - 1)) {
+			m_result = false;
+			return static_cast<ListNode*>(nullptr);
+		}
+
+		if (i > m_length / 2)
+			i = -(int(m_length) - i);
+		ListNodePtr p;
+		if (i > 0) {
+			for (p = first; (i > 0) && (p != m_tailPtr); i--)
+				++p;
+		}
+		else {
+			for (p = last; (++i < 0) && (p != m_headPtr); )
+				--p;
+		}
+		m_result = i == 0;
+		return m_result ? p.m_nodePtr : static_cast<ListNode*>(nullptr);
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	ListNode* AddNode(int i, ListNode* newNode = nullptr, bool manageData = false) {
+		if (not IsAvailable())
+			return nullptr;
+		ListNode* insertBefore = NodePtrAt(i, m_headPtr + 1, m_tailPtr);
+		if (not insertBefore)
+			return nullptr;
+		if (not newNode && (not (newNode = new ListNode())))
+			return nullptr;
+		newNode->m_pred = insertBefore->m_pred;
+		insertBefore->m_pred->m_succ = newNode;
+		newNode->m_succ = insertBefore;
+		newNode->m_manageData = manageData;
+		insertBefore->m_pred = newNode;
+		m_length++;
+		return newNode;
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	ItemType* Insert(int i, bool manageData = false) {
+		ListNode* newNode = AddNode(i, nullptr, manageData);
+		return newNode ? &newNode->DataItem() : nullptr;
+	}
+
+	template<typename T>
+	ItemType* Insert(int i, T&& dataItem, bool manageData = false) {
+		ItemType* itemPtr = Insert(i, manageData);
+		if (not itemPtr)
+			return nullptr;
+		*itemPtr = std::forward<T>(dataItem);
+		return itemPtr;
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	ItemType Extract(int i) {
+		m_result = false;
+		if (not m_length)
+			return *m_none;
+
+		ListNode* node = NodePtrAt(i, m_headPtr + 1, m_tailPtr - 1);
+		if (not node)
+			return *m_none;
+		ItemType data = node->DataValue();
+		delete node;
+		m_length--;
+		m_result = true;
+		return data;
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	bool Discard(int i) {
+		if (not m_length)
+			return false;
+		ListNode* node = NodePtrAt(i, m_headPtr + 1, m_tailPtr - 1);
+		if (not node)
+			return *m_none;
+		delete node;
+		m_length--;
+		return m_result = true;
+	}
+
+	//-----------------------------------------------------------------------------
+	// copy the other list to the end of this list
+	// will leave other list intact
+
+public:
+	List<ItemType>& operator+= (const List<ItemType>& other) { // copy other to end of *this
+		if (other.IsEmpty())
 			return *this;
-		}
+		for (auto& d : other)
+			Insert(-1, d);
+		return *this;
+	}
 
-		inline List<DATA_T>& operator= (List<DATA_T>&& other) noexcept {
-			return Grab (other);
-		}
 
-		inline List<DATA_T>& operator= (std::initializer_list<DATA_T> data) {
-			Destroy();
-			for (auto const& d : data)
-				Append(d);
+	List<ItemType>& operator+= (List<ItemType>&& other) { // move other to end of *this
+		if (other.IsEmpty())
 			return *this;
-		}
+		if (IsEmpty())
+			return Move(other);
+		ListNodePtr thisLast = ListNodePtr(Last());
+		ListNodePtr otherFirst = ListNodePtr(other.First());
+		thisLast.Succ() = otherFirst;
+		otherFirst.Pred() = thisLast;
+		std::swap(m_tail, other.m_tail);
+		std::swap(m_tailPtr, other.m_tailPtr);
+		other.m_headPtr.Succ() = other.m_tail;
+		other.m_tailPtr.Pred() = other.m_head;
+		return *this;
+	}
 
-		explicit List() : 
-#if USE_DATA_PTR
-			m_none (nullptr),
-#endif
-			m_length (0), m_result (true) {
+	//-----------------------------------------------------------------------------
+	// move the other list to this list. current list content will be removed first.
+	// will leave other list empty
+
+public:
+	List<ItemType>& Move(List<ItemType>& other) {
+		Destroy();
+		if (not other.IsAvailable())
 			Init();
+		else {
+			m_head = other.m_head;
+			m_tail = other.m_tail;
+			m_headPtr = other.m_head;
+			m_tailPtr = other.m_tail;
+			m_length = other.m_length;
+			other.Reset();
 		}
-
-		List(List<DATA_T> const& other) :
-#if USE_DATA_PTR
-			m_none (nullptr),
-#endif
-			m_length (0), m_result (true) {
-			Copy(other);
-		}
-		
-		List(List<DATA_T>&& other) noexcept :
-#if USE_DATA_PTR
-			m_none (nullptr),
-#endif
-			m_length (0), m_result (true) {
-			Init ();
-			Grab(other);
-		}
-
-		explicit List(DATA_T& data) : 
-#if USE_DATA_PTR
-			m_none(nullptr),
-#endif
-			m_length(0), m_result(true) {
-#if USE_DATA_PTR
-			m_none = new DATA_T;
-#endif
-			Append(data);
-		}
-
-		explicit List(Array<DATA_T>& data) : 
-#if USE_DATA_PTR
-			m_none (nullptr),
-#endif
-			m_length (0), m_result (true) {
-			Init ();
-			for (auto const& v : data)
-				Append(*v);
-		}
-
-		List(std::initializer_list<DATA_T> data) : 
-#if USE_DATA_PTR
-			m_none (nullptr),
-#endif
-			m_length (0), m_result (true) {
-			Init ();
-			for (auto const& d : data)
-				Append(d);
-		}
-
-		~List() {
-			Destroy();
-		}
-
-//-----------------------------------------------------------------------------
-
-private:
-ListNodePtr NodePtr(int i, ListNodePtr first, ListNodePtr last) {
-	if (i == 0)
-		return first;
-	if (i == -1)
-		return last;
-	ListNodePtr p;
-	if (i > 0) {
-		int32_t h = int (m_length - i);
-		if (h < i)
-			i = -h;
-	}
-	if (i >= 0) {
-		p = first;
-		for (; i && (p != m_tailPtr); i--, p++)
-			;
-	}
-	else
-		for (p = last; ++i && (p != m_headPtr); p = p->m_prev)
-			;
-	return i ? m_nullPtr : p;
-
-}
-
-//-----------------------------------------------------------------------------
-
-public:
-DATA_T* Add(int i) {
-	ListNodePtr p = NodePtr(i, m_headPtr + 1, m_tailPtr);
-	if (!p)
-		return nullptr;
-	ListNode* n = new ListNode;
-	if (!n)
-		return nullptr;
-#if USE_DATA_PTR
-	if (!(n->m_data = new DATA_T)) {
-		delete n;
-		return nullptr;
-	}
-#else
-#endif
-	n->m_prev = p->m_prev;
-	n->m_prev->m_next = n;
-	n->m_next = p;
-	p->m_prev = n;
-	m_length++;
-#if USE_DATA_PTR
-	return n->m_data;
-#else
-	return &n->m_data;
-#endif
-}
-
-//-----------------------------------------------------------------------------
-
-public:
-bool Insert (int i, DATA_T data) {
-	DATA_T * dataPtr = Add (i);
-	if (!dataPtr)
-		return false;
-	*dataPtr = data;
-	return true;
-}
-
-//-----------------------------------------------------------------------------
-
-public:
-auto Pop(int i) {
-	m_result = false;
-	if (!m_length)
-		return DATA_VALUE (m_none);
-
-	ListNodePtr nodePtr = NodePtr(i, m_headPtr + 1, m_tailPtr - 1);
-	if (!nodePtr)
-		return DATA_VALUE (m_none);
-	ListNode* p = nodePtr.m_ptr;
-	DATA_T data = DATA_VALUE (p->m_data);
-	p->m_prev->m_next = p->m_next;
-	p->m_next->m_prev = p->m_prev;
-	delete p;
-	m_length--;
-	m_result = true;
-	return data;
-}
-
-//-----------------------------------------------------------------------------
-
-#if 0
-public:
-auto Pop(DATA_T data) {
-	for (auto [i, d] : *this)
-		if (d == data)
-			return Pop(i);
-	return DATA_VALUE (m_none);
-}
-#endif
-
-//-----------------------------------------------------------------------------
-// move the other list to the end of this list
-// will leave other list empty
-
-public:
-List< DATA_T >& operator+= (List< DATA_T > other) {
-	if (other.Empty())
 		return *this;
-#if 1
-	for (auto [i, d] : other)
-		Insert (-1, d);
-#else
-	ListNode* s = other.m_head.m_next.m_ptr;
-	ListNode* e;
-	if (Empty()) {
-		m_headPtr.m_ptr->m_next = s;
-		s->m_prev = m_headPtr;
 	}
-	else {
-		e = m_tailPtr.m_ptr->m_prev.m_ptr;
-		e->m_next = s;
-		s->m_prev = e;
-	}
-	e = other.m_tail.m_prev.m_ptr;
-	e->m_next = &m_tail;
-	m_tail.m_prev = e;
-	m_tailPtr = &m_tail;
-	other.Init ();
-#endif
-	return *this;
-}
 
-//-----------------------------------------------------------------------------
-// move the other list to the end of this list
-// will leave other list empty
+	//-----------------------------------------------------------------------------
 
 public:
-List< DATA_T >& Grab (List< DATA_T >& other) {
-	Destroy ();
-	if (other.Empty ())
-		return *this;
-	ListNode* s = other.m_head.m_next.m_ptr;
-	ListNode* e;
-	if (Empty ()) {
-		m_headPtr.m_ptr->m_next = s;
-		s->m_prev = m_headPtr;
+	List<ItemType> operator+ (const List<ItemType>& other) {
+		List<ItemType> l;
+		if (IsEmpty())
+			return l = other;
+		if (other.IsEmpty())
+			return l = *this;
+		l = *this;
+		l += other;
+		return l;
 	}
-	else {
-		e = m_tailPtr.m_ptr->m_prev.m_ptr;
-		e->m_next = s;
-		s->m_prev = e;
+
+	//-----------------------------------------------------------------------------
+
+public:
+	template<typename T>
+	int Find(T&& data) {
+		ItemType pattern = std::forward<T>(data);
+		for (auto it = begin(); it != end(); it++)
+			if (*it == pattern)
+				return int (it.Index());
+		return -1;
 	}
-	e = other.m_tail.m_prev.m_ptr;
-	e->m_next = m_tailPtr;
-	m_tailPtr->m_prev = e;
-	m_length = other.m_length;
-	other.Init ();
-	return *this;
-}
 
-//-----------------------------------------------------------------------------
+	//-----------------------------------------------------------------------------
 
 public:
-List< DATA_T > operator+ (const List< DATA_T >& other) {
-	List< DATA_T > l;
-	if (Empty())
-		return l = other;
-	if (other.Empty())
-		return l = *this;
-	l = *this;
-	l += other;
-	return l;
-}
+	List<ItemType> Splice(int32_t from, int32_t to = 0) {
+		ListNode* start = NodePtrAt(int(from), m_headPtr + 1, m_tailPtr - 1);
+		ListNode* end = NodePtrAt(int(to ? to : m_length - 1), m_headPtr + 1, m_tailPtr - 1);
+		List<ItemType> l;
+		if ((start != nullptr) && (end != nullptr)) {
+			for (ListNode* it = start; it != end; it = it->next) {
+				l.Append(new ListNode(it->m_dataItem, it->m_manageData));
+			}
+		}
+		return l;
+	}
 
-//-----------------------------------------------------------------------------
-
-public:
-int Find(DATA_T data) {
-#if 1
-	for (const auto [i, p] : *this)
-		if (p == data)
-			return int (i);
-#else
-	int i = 0;
-	for (ListNodePtr p = m_headPtr->m_next; p != m_tailPtr; p++, i++)
-		if (*p.m_ptr->m_data == data)
-			return int (i);
-#endif
-	return -1;
-}
-
-//-----------------------------------------------------------------------------
+	//-----------------------------------------------------------------------------
 
 public:
-List< DATA_T > Splice(size_t from, size_t to) {
-	ListNode* start = NodePtr(int (from));
-	ListNode* end = NodePtr(int (to ? to : m_length - 1));
-	List< DATA_T > l;
-	if ((start != nullptr) && (end != nullptr)) {
-		for (ListNode* i = start; i != end; i = i->next) {
-			ListNode& n = l.Append(new ListNode);
-			*n.m_data = *i.m_data;
+	template<typename T>
+	inline ItemType* Append(T&& dataItem, bool manageData = false) {
+		return Insert(-1, std::forward<T>(dataItem), manageData);
+	}
+
+	inline ItemType* Append(bool manageData = false) {
+		return Insert(-1, manageData);
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	inline bool Remove(ItemType data) {
+		int i = Find(data);
+		if (i < 0)
+			return (m_result = false);
+		Extract(int32_t(i));
+		return (m_result = true);
+	}
+
+	//-----------------------------------------------------------------------------
+
+public:
+	template<typename FILTER_T>
+	int32_t Filter(FILTER_T filter) {
+		int32_t deleted = 0;
+		for (ListNode* nodePtr = First(); nodePtr != Last(); ) {
+			ListNode* candidate = nodePtr;
+			nodePtr = nodePtr->Succ();
+			if (filter(*candidate->DataPointer())) {
+				delete candidate;
+				deleted++;
+			}
+		}
+		m_length -= deleted;
+		return deleted;
+	}
+
+	//-----------------------------------------------------------------------------
+
+	inline void Swap(ItemType* left, ItemType* right)
+	{
+		ItemType h;
+		memcpy(&h, left, sizeof(ItemType));
+		memcpy(left, right, sizeof(ItemType));
+		memcpy(right, &h, sizeof(ItemType));
+		memset(&h, 0, sizeof(ItemType));
+	}
+
+	//-----------------------------------------------------------------------------
+
+	ItemType& GetMedian(ListNodePtr p, int i) {
+		for (; i; i--)
+			p++;
+		return p->DataValue();
+	}
+
+	//-----------------------------------------------------------------------------
+
+	void Sort(ListNodePtr leftNode, ListNodePtr rightNode, int32_t left, int32_t right, int direction)
+	{
+		int32_t		l = left,
+					r = right;
+		ListNodePtr	ln = leftNode,
+					rn = rightNode;
+
+		MemCpy(&m_median, GetMedian(left, (l + r) / 2), sizeof(ItemType));
+		do {
+			while (direction * m_compare(ln->DataPointer(), &m_median) < 0) {
+				++l;
+				++ln;
+			}
+			while (direction * m_compare(rn->DataPointer(), &m_median) > 0) {
+				--r;
+				--rn;
+			}
+			if (l <= r) {
+				if (l < r)
+					Swap(l->DataValue(), r->DataValue());
+				l++;
+				r--;
+			}
+		} while (l <= r);
+		memset(&m_median, 0, sizeof(ItemType));
+
+		if (l < right)
+			Sort(ln, rightNode, l, right, direction);
+		if (left < r)
+			Sort(leftNode, rn, left, r, direction);
+	}
+
+	//-----------------------------------------------------------------------------
+
+	void SortDescending(tComparator compare)
+	{
+		m_compare = compare;
+		Sort(First(), Last(), m_length - 1, -1);
+	}
+
+	//-----------------------------------------------------------------------------
+
+	void SortAscending(tComparator compare)
+	{
+		if (m_length > 1) {
+			m_compare = compare;
+			Sort(m_headPtr->Succ(), m_tailPtr->Pred(), m_length, -1);
 		}
 	}
-	return l;
-}
 
-//-----------------------------------------------------------------------------
+	//-----------------------------------------------------------------------------
 
 public:
-inline bool Append(DATA_T data) {
-	return Insert(-1, data);
-}
+	inline bool Result(void) {
+		return m_result;
+	}
 
-//-----------------------------------------------------------------------------
-
-public:
-inline bool Remove(DATA_T data) {
-	int i = Find(data);
-	if (i < 0)
-		return (m_result = false);
-	Pop(size_t(i));
-	return (m_result = true);
-}
-
-//-----------------------------------------------------------------------------
-
-public:
-inline bool Result(void) {
-	return m_result;
-}
-
-//-----------------------------------------------------------------------------
+	//-----------------------------------------------------------------------------
 
 };
-
-#endif
