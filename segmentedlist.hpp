@@ -1,13 +1,13 @@
 #pragma once
 
-#include "stack.hpp"
 #include "list.hpp"
 
 #define USE_SEGMENTED_LISTS 0
 
 #if !USE_SEGMENTED_LISTS
 
-#	define SegmentedList	List
+template <typename ITEM_T>
+using SegmentedList = List<ITEM_T>;
 
 #else
 

@@ -1,4 +1,6 @@
-#include "string.hpp"
-
-int32_t String::m_count = 0;
-int32_t String::m_dbgCount = 0;
+#define COMPILE_STRING
+#if (USE_STD || USE_STD_STRING)
+#	include "std_string.cpp"
+#else
+#	include "custom_string.cpp"
+#endif

@@ -5,27 +5,28 @@
 #include <cmath>
 
 #ifndef M_PI
-#   define M_PI 3.14159265358979323846f
-#   define HAVE_M_PI
+#   define M_PI 3.14159265358979323846
 #endif
 
 
-class Conversions
+namespace Conversions
 {
-public:
     static float DegToRad(float deg) {
-        return (float)(deg / 180.0 * (float) M_PI);
+        return static_cast<float>((static_cast<double>(deg) / 180.0 * M_PI));
     }
 
     static float RadToDeg(float rad) {
-        return (float)(rad * 180.0 / (float) M_PI);
+        return static_cast<float>((static_cast<double>(rad) * 180.0 / M_PI));
     }
 
     static float DotToRad(float dot) {
-        return (float)acos(dot);
+        return static_cast<float>(acos(dot));
     }
 
     static float DotToDeg(float dot) {
         return RadToDeg(DotToRad(dot));
     }
+
+    template <typename T, size_t N>
+    constexpr size_t ArrayLength(const T(&)[N]) noexcept { return N; }
 };

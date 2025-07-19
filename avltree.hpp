@@ -17,8 +17,7 @@
 #include <utility>
 #include <stdexcept>
 #include "string.h"
-#include "basicdatapool.hpp"
-#include "allocator.h"
+
 #include "avltreetraits.h"
 #include "type_helper.hpp"
 
@@ -30,9 +29,6 @@
 
 template <typename KEY_T, typename DATA_T>
 class AVLTree
-#if DEBUG_MALLOC 
-    : public Allocator
-#endif
 {
 public:
     using Comparator = typename AVLTreeTraits<KEY_T, DATA_T>::Comparator;

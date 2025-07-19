@@ -1,6 +1,5 @@
 #pragma once
 
-#include "allocator.h"
 #include "avltreetraits.h"
 
 // =================================================================================================
@@ -18,9 +17,6 @@ using AVLNodePtr = AVLNode*;
 //-----------------------------------------------------------------------------
 
 class AVLNode
-#if DEBUG_MALLOC 
-    : public Allocator
-#endif
 {
 public:
     KEY_T		    key;

@@ -129,7 +129,7 @@ public:
 				return nullptr;
 		}
 		else {
-			typename AVLTree<KEY_T, int>::AVLNode* dataNode = m_usedItems->FindData(itemIndex);
+			typename Map<KEY_T, int>::AVLNode* dataNode = m_usedItems->FindData(itemIndex);
 			if (dataNode)
 				fprintf(stderr, "                                                duplicate item index #%d\n", itemIndex);
 		}

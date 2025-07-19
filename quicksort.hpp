@@ -128,7 +128,7 @@ void SortDescending(DATA_T* data, int32_t left, int32_t right, tComparator compa
 {
 	if (right - left > 1) {
 		m_compare = compare;
-		Sort(data, left, right, -1);
+		Sort(data, left, right, 1);
 	}
 }
 
@@ -138,7 +138,7 @@ void SortAscending(DATA_T* data, int32_t left, int32_t right, tComparator compar
 {
 	if (right - left > 1) {
 		m_compare = compare;
-		Sort(data, left, right, 1);
+		Sort(data, left, right, -1);
 	}
 }
 

@@ -6,9 +6,9 @@
 //#include <stdlib.h>
 #include <stdint.h>
 #include "conversions.hpp"
-#include "array.hpp"
+//#include "array.hpp"
 #include "list.hpp"
-#include "vector.hpp"
+#include "custom_vector.hpp"
 
 // =================================================================================================
 // Matrix4f math.Just the usual 3D stuff.
@@ -136,12 +136,12 @@ public:
         return *this;
     }
 
-    
+#if 0    
     inline Matrix4f& operator= (const ManagedArray<float>& data) {
         FromArray(data.Data());
         return *this;
     }
-
+#endif
     
     inline Matrix4f Identity(void) {
         return Matrix4f({ Vector4f({ 1.0f, 0.0f, 0.0f, 0.0f }), Vector4f({ 0.0f, 1.0f, 0.0f, 0.0f }), Vector4f({ 0.0f, 0.0f, 1.0f, 0.0f }), Vector4f({ 0.0f, 0.0f, 0.0f, 1.0f }) });

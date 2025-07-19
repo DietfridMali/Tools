@@ -1,5 +1,11 @@
 #pragma once
 
+#if USE_STD
+
+#   error custom shared handle included
+
+#else
+
 // =================================================================================================
 
 template<typename DATA_T>
@@ -14,7 +20,7 @@ public:
     { }
 
 
-    virtual DATA_T Reserve(size_t capacity = 1) = 0;
+    virtual DATA_T Claim(size_t capacity = 1) = 0;
 
 
     virtual void Release(void) = 0;
@@ -134,7 +140,7 @@ public:
 
 
     inline DATA_T Handle(void) {
-        return m_resource ? m_resource->m_handle : (DATA_T*) 0;
+        return m_resource ? m_resource->m_handle : (DATA_T) 0;
     }
 
 
@@ -169,4 +175,4 @@ public:
 
 // =================================================================================================
 
-
+#endif
